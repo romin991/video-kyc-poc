@@ -49,6 +49,15 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
     assert.equal(created.body?.status, "waiting");
     assert.equal(typeof created.body?.id, "string");
     assert.equal(created.body?.createdBy, "Desk 1");
+    const onboarding = created.body?.onboardingPayload as { fullName?: string; applicationId?: string };
+    assert.equal(onboarding.fullName, "Ayu Prameswari");
+    assert.equal(onboarding.applicationId, "APP-2026-00421");
+    assert.equal(created.body?.acwNotes, "");
+    assert.equal(created.body?.disposition, null);
+    assert.deepEqual(created.body?.captures, []);
+    const checklist = created.body?.checklist as Array<{ checked: boolean }>;
+    assert.equal(checklist.length, 3);
+    assert.equal(checklist.every((item) => item.checked === false), true);
     assert.match(String(created.body?.joinUrl), /^http:\/\/localhost:5174\/join\/.+/);
     assert.equal("agentToken" in (created.body ?? {}), false);
     assert.equal("customerToken" in (created.body ?? {}), false);

@@ -37,7 +37,9 @@ body {
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
   color: inherit;
 }
@@ -59,7 +61,11 @@ button:disabled {
 p,
 h1,
 h2,
-ul {
+h3,
+ul,
+figure,
+dl,
+dd {
   margin: 0;
 }
 
@@ -402,6 +408,193 @@ button.danger {
   padding: 2px 8px;
 }
 
+h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.kyc-stack,
+.acw-wrap {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.kyc-grid {
+  display: grid;
+  grid-template-columns: 1fr 0.85fr 1.05fr;
+  gap: 16px;
+}
+
+.facts {
+  display: grid;
+  gap: 8px;
+}
+
+.facts div {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.checklist label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.checklist input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.capture-actions,
+.disposition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.kind-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.kind-field select,
+textarea {
+  border: 1px solid var(--line);
+  background: var(--bg-sunken);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.file-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+
+.file-btn:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.file-btn input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.capture-grid {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.capture-grid figure {
+  display: grid;
+  gap: 4px;
+}
+
+.capture-grid img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+}
+
+.capture-grid figcaption {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+button.choice {
+  border-radius: 999px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+
+button.choice[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  font-weight: 650;
+}
+
+button.choice-reject[aria-pressed="true"] {
+  background: var(--bad);
+  color: #2a0d08;
+}
+
+button.choice-utv[aria-pressed="true"] {
+  background: var(--wait);
+  color: #2a2208;
+}
+
+.pill-approve {
+  color: var(--good);
+}
+
+.pill-reject {
+  color: var(--bad);
+}
+
+.pill-utv {
+  color: var(--wait);
+}
+
+.ended-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.acw-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 860px) {
   .app {
     width: min(1120px, calc(100% - 24px));
@@ -410,7 +603,9 @@ button.danger {
   .topbar,
   .top-meta,
   .desk,
-  .queue-item {
+  .kyc-grid,
+  .queue-item,
+  .facts div {
     display: grid;
     grid-template-columns: 1fr;
   }

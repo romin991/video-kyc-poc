@@ -1,8 +1,8 @@
 # Superbank Video KYC POC
 
-P0 session shell for a video KYC proof of concept. An agent creates a verification session, the customer opens a join link, the agent accepts from the queue, both sides enter a call, and the agent ends the session.
+Video KYC proof of concept. An agent creates a verification session, the customer opens a join link, the agent accepts from the queue, both sides enter a call, and the agent ends the session. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session.
 
-When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness, IDV, AML, SSO, and production hardening are out of scope.
+When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness models, IDV, AML, SSO, and production hardening are out of scope. The checklist is a manual checkbox, not a model.
 
 ## Two-browser local run
 
@@ -30,8 +30,11 @@ pnpm dev
 3. **Browser B (customer).** Paste that link. The page should say **Waiting for an agent**. Leave it open.
 4. **Browser A.** The session appears in the queue. Click **Accept**.
 5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
-6. **Browser A.** Click **End session**.
-7. Browser A leaves the call stage. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
+6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
+7. Add a still. **Capture still** grabs the current customer video frame when LiveKit video is actually playing. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays after refresh.
+8. **Browser A.** Click **End session**.
+9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, and stills.
+10. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
 
 Run the processes in separate terminals if you want quieter logs:
 
@@ -41,7 +44,7 @@ pnpm dev:agent
 pnpm dev:customer
 ```
 
-The API keeps sessions in memory. Restarting it drops the queue and invalidates open join links.
+The API keeps sessions, checklist, notes, disposition, and stills in memory. Restarting it drops them and invalidates open join links.
 
 ## LiveKit
 
@@ -79,9 +82,12 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 
 | Method | Path | Result |
 | --- | --- | --- |
-| `POST` | `/sessions` | `{ id, joinUrl, joinToken, status: "waiting", roomName, createdAt, createdBy }` |
+| `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
 | `GET` | `/sessions?status=waiting` | `{ sessions }` queue |
-| `GET` | `/sessions/:id` | one session |
+| `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, and `captures[]` |
+| `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, and `disposition` |
+| `POST` | `/sessions/:id/captures` | store one JPEG or PNG still |
+| `GET` | `/sessions/:id/captures/:captureId` | still bytes (`image/jpeg` or `image/png`) |
 | `POST` | `/sessions/:id/accept` | `{ sessionId, roomName, agentToken, status: "in_call" }` |
 | `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status }` |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
@@ -132,7 +138,7 @@ Those elements stay hidden until `data-active="true"` is set after a video track
 
 ```
 apps/api                 Express session store, REST, LiveKit token mint
-apps/agent-dashboard     Vite + React desk (create, queue, accept, end)
+apps/agent-dashboard     Vite + React desk (create, queue, accept, checklist, stills, ACW, end)
 apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ```
 
@@ -146,6 +152,68 @@ pnpm build      # production bundles for both UIs
 
 Optional environment variables are listed in `.env.example`. Defaults match the table above. The API listens on `127.0.0.1` only.
 
+## Wave 1 desk
+
+`POST /sessions` with `{}` stores this stub:
+
+| Field | Stub |
+| --- | --- |
+| `fullName` | Ayu Prameswari |
+| `phone` | +628123456789 |
+| `productId` | SAVINGS-PLUS |
+| `applicationId` | APP-2026-00421 |
+| `reason` | New savings account video KYC |
+
+Send overrides at the top level or under `onboarding`. A nested `onboarding` object wins for keys it sets. `product` is an alias of `productId`, `application` of `applicationId`, and `reasonForVkyc` of `reason`. Blank strings keep the stub. The customer page does not collect this.
+
+The checklist starts as three unchecked items: `identity_match`, `liveness_digits`, `docs_shown`. `PATCH` updates `checked` by id. Notes are `acwNotes` (4000 characters). Disposition is `approve`, `reject`, or `utv` (labels Approve, Reject, and UTV are accepted). It is saved only after the session has ended and at least one still exists. Before that, the API returns `409` (call still open) or `422` with `error: "capture_required"`.
+
+### Capture upload
+
+WebRTC can grab a still from the customer video track in the browser and post it here. The agent app exposes `uploadSessionCapture` and `useCaptureUpload` in `apps/agent-dashboard/src/captures.ts`. Pass a `Blob`, `File`, or base64/data URL. `blobFromVideoFrame` paints a `<video>` element to a JPEG if you do not have the track handy.
+
+`POST /sessions/:id/captures`
+
+Multipart (`Content-Type: multipart/form-data`):
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `image` | yes | JPEG or PNG file, 4 MB max |
+| `kind` | no | `face`, `id`, or `other`. Default `other` |
+| `capturedAt` | no | ISO-8601. Default is the server time |
+
+JSON:
+
+```json
+{
+  "image": "data:image/jpeg;base64,/9j/...",
+  "kind": "face",
+  "capturedAt": "2026-09-30T07:00:00.000Z"
+}
+```
+
+`image` may also be raw base64 without the data-URL prefix. Content type is sniffed from the bytes, not the filename. `201` returns:
+
+```json
+{
+  "id": "cap_…",
+  "url": "http://127.0.0.1:3001/sessions/<sessionId>/captures/<captureId>",
+  "path": "/sessions/<sessionId>/captures/<captureId>",
+  "kind": "face",
+  "contentType": "image/jpeg",
+  "createdAt": "2026-09-30T07:00:01.000Z",
+  "capturedAt": "2026-09-30T07:00:00.000Z"
+}
+```
+
+`GET /sessions/:id` includes `captures` as that same summary, without the bytes. `GET` the `path` (joined to the API origin) or `url` for the image. A session holds up to 20 stills. Unknown sessions return `404`. Non-images return `400`.
+
+```bash
+curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/captures" \
+  -F "kind=face" \
+  -F "image=@still.jpg;type=image/jpeg"
+```
+
 ## Out of scope
 
-OCR, liveness, IDV, AML, SSO, persistence, and production hardening.
+OCR, liveness models, IDV, AML, SSO, recording, queue and workforce management, CRM, and production hardening. Escalate and PSU are not dispositions in this wave.
