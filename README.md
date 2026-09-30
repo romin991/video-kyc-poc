@@ -95,7 +95,7 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/sessions/:id/call-recording` | `{ mode, recordingId }` while egress is starting, recording, or blocked |
 | `POST` | `/sessions/:id/call-recording` | fallback `video` file (`video/webm` or `video/mp4`, 40 MB) when Cloud egress cannot start |
-| `GET` | `/sessions/:id/call-recording/file` | that fallback file |
+| `GET` | `/sessions/:id/call-recording/file.webm` or `file.mp4` | that fallback file |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api" }` |
 
 `agentToken` and `customerToken` are LiveKit JWTs when the API key and secret are set, and `lk-stub-…` strings otherwise. A second accept of the same session returns `409`. `POST /sessions/claim` on an empty queue returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` on create and as `claimedBy` on claim or accept. It is not checked.
@@ -376,14 +376,14 @@ OCR, liveness models, IDV, AML, JumpCloud SSO, Corex, Onboarding, and production
 
 When LiveKit URL, API key, and API secret are all set, claim and accept arm a room-composite egress for `vkyc-<sessionId>`. The API waits until that room exists (a participant has connected), starts one MP4 egress, and stops it when the session ends. Track composite is not used: it needs track ids, and the room name is enough for one mixed file of the call.
 
-The recorder then calls eng's attach route. **That route is not implemented in this API.** Nothing in `GET /sessions/:id` adds `recordingId` or `recordingUrl` until eng lands it. ACW does not render the link here.
+The recorder then calls eng's attach route from [PR #7](https://github.com/romin991/video-kyc-poc/pull/7). **That route is not on `main` yet**, so this API does not store the fields and ACW here does not render the link. Until that PR lands, the POST returns `404` and the body is logged.
 
 ```
-PATCH /sessions/:id/recording
-{ "recordingId": "<egress-id>", "recordingUrl": "https://…" }
+POST /sessions/:id/recording
+{ "recordingUrl": "https://…", "recordingId": "<egress-id>" }
 ```
 
-`recordingId` and `recordingUrl` are each optional, and at least one is required. A later call overwrites. The egress id is sent as soon as LiveKit returns it. The URL is sent again when the finished egress has an HTTPS `file.location` (or `EGRESS_PUBLIC_BASE_URL` plus the object key). A `404` is retried a few times, then logged with the body that was not stored. Accept, the call, and end still succeed.
+Send either field or both. An omitted field is left unchanged. The egress id is posted as soon as LiveKit returns it. When the finished egress has an HTTPS `file.location` (or `EGRESS_PUBLIC_BASE_URL` plus the object key), a second POST sends the id and that URL. A `404` is retried a few times. Accept, the call, and end still succeed.
 
 Runnable check, once LiveKit env is set:
 
@@ -394,7 +394,7 @@ pnpm dev
 1. Agent: **Create session**. Customer: open the join link and allow camera and microphone.
 2. Agent: **Claim**. Both sides connect. The desk should say **Call recording is on** within a couple of seconds of the room being live. The API log shows `egress <id> recording vkyc-<sessionId>`.
 3. Talk for a few seconds. Agent: **End session**.
-4. The API log shows a stored `PATCH /sessions/<id>/recording`, or `was not stored (HTTP 404)` with `recordingId` and, when the file is ready, `recordingUrl`. Eng's ACW can show that URL once their route is on the API.
+4. The API log shows a stored `POST /sessions/<id>/recording`, or `was not stored (HTTP 404)` with `recordingId` and, when the file is ready, `recordingUrl`. After PR #7 is on the API, `GET /sessions/:id` includes those fields and ACW shows the link.
 
 Egress file output:
 
@@ -407,10 +407,10 @@ Egress file output:
 | `EGRESS_FILEPATH` | Default `recordings/{room_name}-{time}.mp4`. |
 | `EGRESS_PUBLIC_BASE_URL` | HTTPS origin used when egress reports `s3://bucket/key` instead of an HTTPS location. |
 
-If Cloud egress cannot start (no storage, egress disabled, the room API cannot be reached, or repeated start failures), the desk says it is recording in the browser, captures the customer tile and both microphones, and uploads that file on **End session**. The bytes stay in API memory at `GET /sessions/:id/call-recording/file`, and the same PATCH is attempted with `recordingId` `local_…` and that URL. Restarting the API drops the file.
+If Cloud egress cannot start (no storage, egress disabled, the room API cannot be reached, or repeated start failures), the desk says it is recording in the browser, captures the customer tile and both microphones, and uploads that file on **End session**. The bytes stay in API memory at `GET /sessions/:id/call-recording/file.webm` (or `file.mp4`). The same POST is attempted with `recordingId` `local_…` and that URL, which ends in `.webm` or `.mp4` so ACW can play it. Restarting the API drops the file.
 
 Without the three LiveKit variables, recording stays off and the call shell is unchanged.
 
 ## Out of scope
 
-OCR, liveness models, IDV, AML, SSO, CRM, long-term recording retention, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. The ACW recording link is eng's, via the PATCH contract above.
+OCR, liveness models, IDV, AML, SSO, CRM, long-term recording retention, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. The ACW recording link is eng's, via the POST contract above.

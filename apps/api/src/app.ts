@@ -203,13 +203,14 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   POST /sessions/:id/end         -> { status: "ended" }
  *   GET  /sessions/:id/call-recording -> { mode, recordingId }
  *   POST /sessions/:id/call-recording -> fallback webm/mp4 when Cloud egress is unavailable
- *   GET  /sessions/:id/call-recording/file -> fallback recording bytes
+ *   GET  /sessions/:id/call-recording/file.webm|mp4 -> fallback recording bytes
  *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide, queuePosition }
  *
  * Call recording starts a LiveKit room-composite egress when the in-call room
  * exists, and stops it when the session ends. The egress id and file URL are
- * sent with PATCH /sessions/:id/recording. That route is owned by eng and is
- * not implemented here. GET /sessions/:id does not add recording fields.
+ * sent with POST /sessions/:id/recording. That route is owned by eng (open
+ * PR, not on main yet) and is not implemented here. GET /sessions/:id does
+ * not add recording fields until that route lands.
  *
  * Creating a session always leaves it waiting. Claim and accept are the only
  * ways into in_call, and each one takes a single waiting session. GET
@@ -486,7 +487,8 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 400, "bad_request", "Recording must be video/webm or video/mp4");
       return;
     }
-    const recordingUrl = `${req.protocol}://${req.get("host") ?? "localhost:3001"}/sessions/${session.id}/call-recording/file`;
+    const ext = contentType === "video/mp4" ? "mp4" : "webm";
+    const recordingUrl = `${req.protocol}://${req.get("host") ?? "localhost:3001"}/sessions/${session.id}/call-recording/file.${ext}`;
     void recording
       .saveFallback(session.id, { bytes: file.buffer, contentType, recordingUrl })
       .then((saved) => {
@@ -502,9 +504,10 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       });
   });
 
-  app.get("/sessions/:id/call-recording/file", (req, res) => {
+  app.get("/sessions/:id/call-recording/file.:ext", (req, res) => {
     const file = recording?.fallbackFile(req.params.id);
-    if (!file) {
+    const expected = file?.contentType === "video/mp4" ? "mp4" : "webm";
+    if (!file || req.params.ext !== expected) {
       sendError(res, 404, "not_found", "Recording not found");
       return;
     }

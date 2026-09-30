@@ -18,7 +18,7 @@ export interface CallRecordingStatus {
   recordingId: string | null;
 }
 
-/** Eng attach contract. At least one field is sent. */
+/** Eng attach body for POST /sessions/:id/recording. At least one field is sent. */
 export interface RecordingAttach {
   recordingId?: string;
   recordingUrl?: string;
@@ -201,7 +201,7 @@ function defaultAttachOrigin(env: NodeJS.ProcessEnv = process.env): string {
   return `http://127.0.0.1:${port}`;
 }
 
-export async function patchSessionRecording(
+export async function postSessionRecording(
   sessionId: string,
   body: RecordingAttach,
   options: { origin?: string; fetchImpl?: typeof fetch; env?: NodeJS.ProcessEnv } = {},
@@ -210,7 +210,7 @@ export async function patchSessionRecording(
   const fetchImpl = options.fetchImpl ?? fetch;
   try {
     const response = await fetchImpl(`${origin}/sessions/${encodeURIComponent(sessionId)}/recording`, {
-      method: "PATCH",
+      method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -238,7 +238,7 @@ export function createCallRecorderFromEnv(env: NodeJS.ProcessEnv = process.env):
     rooms: {
       listRooms: async (names) => rooms.listRooms(names),
     },
-    attach: (sessionId, body) => patchSessionRecording(sessionId, body, { env }),
+    attach: (sessionId, body) => postSessionRecording(sessionId, body, { env }),
     file: egressFileConfigFromEnv(env),
   });
 }
@@ -479,7 +479,7 @@ class LiveKitCallRecorder implements CallRecorder {
       if (result.status !== 404 && result.status !== 0) break;
     }
     console.warn(
-      `[vkyc] PATCH /sessions/${sessionId}/recording was not stored (HTTP ${lastStatus}). Eng attach route is not on this API yet. ${JSON.stringify(body)}`,
+      `[vkyc] POST /sessions/${sessionId}/recording was not stored (HTTP ${lastStatus}). Eng attach route is not on this API yet. ${JSON.stringify(body)}`,
     );
   }
 }

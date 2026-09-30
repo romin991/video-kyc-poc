@@ -9,8 +9,8 @@ import {
   classifyEgressError,
   createCallRecorder,
   createCallRecorderFromEnv,
-  patchSessionRecording,
   playableRecordingUrl,
+  postSessionRecording,
   type CallRecorder,
   type EgressApi,
   type EgressSnapshot,
@@ -182,20 +182,20 @@ test("storage rejection switches to the browser fallback and still patches a fil
   const saved = await recorder.saveFallback("s", {
     bytes: Buffer.from("webm-bytes"),
     contentType: "video/webm",
-    recordingUrl: "http://127.0.0.1:3001/sessions/s/call-recording/file",
+    recordingUrl: "http://127.0.0.1:3001/sessions/s/call-recording/file.webm",
   });
   assert.equal(saved.ok, true);
   if (saved.ok) {
     assert.match(saved.recordingId, /^local_/);
     assert.equal(patches[0]?.recordingId, saved.recordingId);
-    assert.equal(patches[0]?.recordingUrl, "http://127.0.0.1:3001/sessions/s/call-recording/file");
+    assert.equal(patches[0]?.recordingUrl, "http://127.0.0.1:3001/sessions/s/call-recording/file.webm");
     assert.equal(recorder.fallbackFile("s")?.bytes.toString(), "webm-bytes");
   }
 
   const rejected = await recorder.saveFallback("other", {
     bytes: Buffer.from("x"),
     contentType: "video/webm",
-    recordingUrl: "http://127.0.0.1:3001/sessions/other/call-recording/file",
+    recordingUrl: "http://127.0.0.1:3001/sessions/other/call-recording/file.webm",
   });
   assert.equal(rejected.ok, false);
 });
@@ -256,7 +256,7 @@ test("a missing attach route is retried and does not fail the call", async () =>
   assert.equal(recorder.status("s").recordingId, "EG_1");
 });
 
-test("patchSessionRecording sends the eng contract", async () => {
+test("postSessionRecording sends eng's POST /sessions/:id/recording contract", async () => {
   const seen: Array<{ method: string; url: string; body: unknown }> = [];
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -274,20 +274,20 @@ test("patchSessionRecording sends the eng contract", async () => {
   await listen(server);
   const port = (server.address() as AddressInfo).port;
   try {
-    const ok = await patchSessionRecording(
+    const ok = await postSessionRecording(
       "session-1",
       { recordingId: "EG_9", recordingUrl: "https://cdn.example/call.mp4" },
       { origin: `http://127.0.0.1:${port}` },
     );
     assert.deepEqual(ok, { ok: true });
-    assert.equal(seen[0]?.method, "PATCH");
+    assert.equal(seen[0]?.method, "POST");
     assert.equal(seen[0]?.url, "/sessions/session-1/recording");
     assert.deepEqual(seen[0]?.body, {
       recordingId: "EG_9",
       recordingUrl: "https://cdn.example/call.mp4",
     });
 
-    const missing = await patchSessionRecording("missing", { recordingId: "EG_9" }, { origin: `http://127.0.0.1:${port}` });
+    const missing = await postSessionRecording("missing", { recordingId: "EG_9" }, { origin: `http://127.0.0.1:${port}` });
     assert.deepEqual(missing, { ok: false, status: 404 });
   } finally {
     await close(server);
@@ -380,11 +380,11 @@ test("fallback upload is served and patched when cloud egress is blocked", async
     const posted = await fetch(`${base}/sessions/${id}/call-recording`, { method: "POST", body: form });
     const postedBody = (await posted.json()) as { recordingId?: string; recordingUrl?: string };
     assert.equal(posted.status, 201);
-    assert.match(String(postedBody.recordingUrl), new RegExp(`/sessions/${id}/call-recording/file$`));
+    assert.match(String(postedBody.recordingUrl), new RegExp(`/sessions/${id}/call-recording/file\\.webm$`));
     assert.equal(patches[0]?.recordingId, postedBody.recordingId);
     assert.equal(patches[0]?.recordingUrl, postedBody.recordingUrl);
 
-    const file = await fetch(`${base}/sessions/${id}/call-recording/file`);
+    const file = await fetch(`${base}/sessions/${id}/call-recording/file.webm`);
     assert.equal(file.status, 200);
     assert.equal(file.headers.get("content-type"), "video/webm");
     assert.equal(Buffer.from(await file.arrayBuffer()).toString(), "fake-webm");
