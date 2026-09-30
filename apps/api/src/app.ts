@@ -208,9 +208,8 @@ function isPayloadTooLarge(error: unknown): boolean {
  *
  * Call recording starts a LiveKit room-composite egress when the in-call room
  * exists, and stops it when the session ends. The egress id and file URL are
- * sent with POST /sessions/:id/recording. That route is owned by eng (open
- * PR, not on main yet) and is not implemented here. GET /sessions/:id does
- * not add recording fields until that route lands.
+ * stored with POST /sessions/:id/recording. GET /sessions/:id returns
+ * recordingUrl, recordingId, and recordingAttachedAt.
  *
  * Creating a session always leaves it waiting. Claim and accept are the only
  * ways into in_call, and each one takes a single waiting session. GET
@@ -227,9 +226,8 @@ function isPayloadTooLarge(error: unknown): boolean {
  * payload to CRM_STUB_WEBHOOK_URL and DATALAKE_STUB_WEBHOOK_URL, or appends
  * a JSON line to DISPOSITION_STUB_LOG_PATH when a webhook is unset.
  *
- * POST /sessions/:id/recording stores a recording URL and/or id. This API
- * does not start LiveKit egress. Webrtc calls it when egress has an artifact.
- * After-call work reads recordingUrl from the session.
+ * POST /sessions/:id/recording stores a recording URL and/or id. Egress calls
+ * it when an artifact exists. After-call work reads recordingUrl.
  *
  * captureGuide is the desk's current still kind (`face` | `id` | `other` | null).
  * The customer join poll reads it. `id` is the only value that shows the
