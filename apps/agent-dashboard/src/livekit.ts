@@ -15,6 +15,8 @@ export interface LiveKitMedia {
   mediaConnected: boolean;
   /** Why media did not start. Null while idle, connecting, or connected. */
   mediaError: string | null;
+  /** Remote customer camera, once subscribed. Screen share is ignored. */
+  remoteVideoTrack: MediaStreamTrack | null;
 }
 
 const LOCAL_VIDEO = '[data-livekit="local"]';
@@ -32,7 +34,8 @@ const NOT_A_JWT =
  * data-active="true" is set when a video track attaches.
  * Cleanup disconnects the room and clears data-active.
  *
- * The agent dashboard and customer webview copies of this hook match on purpose.
+ * The customer webview hook matches this file. This desk also keeps the remote
+ * customer camera track so Capture still can grab a frame from it.
  *
  * Media capture uses plain getUserMedia({ audio: true, video: true }) then
  * publishTrack — LiveKit's setCameraEnabled(true) exact-matches deviceId
@@ -43,10 +46,12 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
   const serverUrl = rawUrl && rawUrl.length > 0 ? rawUrl : null;
   const [mediaConnected, setMediaConnected] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [remoteVideoTrack, setRemoteVideoTrack] = useState<MediaStreamTrack | null>(null);
 
   useEffect(() => {
     setMediaConnected(false);
     setMediaError(null);
+    setRemoteVideoTrack(null);
 
     if (!roomName || !token) return;
 
@@ -63,11 +68,23 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     let cancelled = false;
     const room = new Room();
 
+    const noteRemoteVideo = (track: RemoteTrack) => {
+      if (cancelled) return;
+      if (track.kind !== Track.Kind.Video) return;
+      if (track.source === Track.Source.ScreenShare) return;
+      setRemoteVideoTrack(track.mediaStreamTrack);
+    };
+
     const onSubscribed = (track: RemoteTrack) => {
       attachRemote(track);
+      noteRemoteVideo(track);
     };
 
     room.on(RoomEvent.TrackSubscribed, onSubscribed);
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      if (cancelled || track.kind !== Track.Kind.Video) return;
+      setRemoteVideoTrack((current) => (current?.id === track.mediaStreamTrack.id ? null : current));
+    });
     room.on(RoomEvent.LocalTrackPublished, (publication) => {
       if (publication.source !== Track.Source.Camera || !publication.track) return;
       attachLocal(publication.track);
@@ -90,7 +107,9 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
         if (cancelled) return;
         room.remoteParticipants.forEach((participant) => {
           participant.trackPublications.forEach((publication) => {
-            if (publication.track) attachRemote(publication.track);
+            if (!publication.track) return;
+            attachRemote(publication.track);
+            noteRemoteVideo(publication.track);
           });
         });
       } catch (error) {
@@ -109,6 +128,7 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
       cancelled = true;
       room.disconnect();
       clearTiles();
+      setRemoteVideoTrack(null);
     };
   }, [roomName, token, serverUrl]);
 
@@ -121,6 +141,7 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     token,
     mediaConnected,
     mediaError: configurationError ?? mediaError,
+    remoteVideoTrack,
   };
 }
 
