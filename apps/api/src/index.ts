@@ -2,6 +2,7 @@ import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app.js";
+import { describeStubDelivery, resolveStubConfig } from "./stubs.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, "../../../.env") });
@@ -26,4 +27,5 @@ app.listen(port, "127.0.0.1", () => {
       "LIVEKIT_API_KEY or LIVEKIT_API_SECRET is unset. Sessions still accept and join; media stays off.",
     );
   }
+  console.log(describeStubDelivery(resolveStubConfig(process.env)));
 });
