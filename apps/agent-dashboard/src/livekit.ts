@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { Room, RoomEvent, Track, type LocalTrack, type RemoteTrack } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type LocalTrack,
+  type RemoteTrack,
+} from "livekit-client";
 
 export interface LiveKitMedia {
   serverUrl: string | null;
@@ -27,6 +33,10 @@ const NOT_A_JWT =
  * Cleanup disconnects the room and clears data-active.
  *
  * The agent dashboard and customer webview copies of this hook match on purpose.
+ *
+ * Media capture uses plain getUserMedia({ audio: true, video: true }) then
+ * publishTrack — LiveKit's setCameraEnabled(true) exact-matches deviceId
+ * "default", which Chrome fake-AV often lacks for video.
  */
 export function useLiveKit(roomName: string | null, token: string | null): LiveKitMedia | null {
   const rawUrl = import.meta.env.VITE_LIVEKIT_URL;
@@ -73,16 +83,9 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
         setMediaConnected(true);
         setMediaError(null);
         try {
-          await room.localParticipant.setMicrophoneEnabled(true);
+          await publishLocalAv(room);
         } catch (error) {
-          console.error("[vkyc] microphone enable failed", error);
-        }
-        if (cancelled) return;
-        try {
-          const camera = await room.localParticipant.setCameraEnabled(true);
-          if (camera?.track) attachLocal(camera.track);
-        } catch (error) {
-          console.error("[vkyc] camera enable failed", error);
+          console.error("[vkyc] local A/V publish failed", error);
         }
         if (cancelled) return;
         room.remoteParticipants.forEach((participant) => {
@@ -119,6 +122,40 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     mediaConnected,
     mediaError: configurationError ?? mediaError,
   };
+}
+
+async function publishLocalAv(room: Room): Promise<void> {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter((d) => d.kind === "audioinput" || d.kind === "videoinput");
+  console.info(
+    "[vkyc] media devices",
+    inputs.map((d) => ({ kind: d.kind, label: d.label || "(empty)", id: d.deviceId.slice(0, 12) })),
+  );
+  if (inputs.length === 0) {
+    throw new Error(
+      "No audio/video inputs. On the box, Chrome must be launched with FAKE-AV (--use-fake-device-for-media-stream). Restart that Chrome fork with /workspace/vkyc-tunnels/FAKE-AV.on present.",
+    );
+  }
+
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+  try {
+    for (const mediaTrack of stream.getAudioTracks()) {
+      await room.localParticipant.publishTrack(mediaTrack, {
+        source: Track.Source.Microphone,
+        name: mediaTrack.label || "microphone",
+      });
+    }
+    for (const mediaTrack of stream.getVideoTracks()) {
+      const publication = await room.localParticipant.publishTrack(mediaTrack, {
+        source: Track.Source.Camera,
+        name: mediaTrack.label || "camera",
+      });
+      if (publication.track) attachLocal(publication.track);
+    }
+  } catch (error) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw error;
+  }
 }
 
 function isJoinableToken(token: string): boolean {
