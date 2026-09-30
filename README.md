@@ -93,6 +93,9 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | `POST` | `/sessions/:id/accept` | that waiting session → in call |
 | `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide, queuePosition }` |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
+| `GET` | `/sessions/:id/call-recording` | `{ mode, recordingId }` while egress is starting, recording, or blocked |
+| `POST` | `/sessions/:id/call-recording` | fallback `video` file (`video/webm` or `video/mp4`, 40 MB) when Cloud egress cannot start |
+| `GET` | `/sessions/:id/call-recording/file.webm` or `file.mp4` | that fallback file |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api" }` |
 
 `agentToken` and `customerToken` are LiveKit JWTs when the API key and secret are set, and `lk-stub-…` strings otherwise. A second accept of the same session returns `409`. `POST /sessions/claim` on an empty queue returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` on create and as `claimedBy` on claim or accept. It is not checked.
@@ -141,7 +144,7 @@ Those elements stay hidden until `data-active="true"` is set after a video track
 ## Layout
 
 ```
-apps/api                 Express session store, REST, LiveKit token mint
+apps/api                 Express session store, REST, LiveKit token mint, call egress
 apps/agent-dashboard     Vite + React desk (waiting queue, claim, checklist, stills, ACW, end)
 apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ```
@@ -255,7 +258,20 @@ Claim and accept return `{ sessionId, roomName, agentToken, joinUrl, status: "in
 
 ## Call recording
 
-This API does not start LiveKit egress. Webrtc owns egress. When the artifact exists, webrtc calls:
+When LiveKit URL, API key, and API secret are all set, claim and accept arm a room-composite egress for `vkyc-<sessionId>`. The API waits until that room exists, starts one MP4, and stops it when the session ends. Track composite is not used: it needs track ids, and the room name is enough for one mixed file of the call. The egress id is posted as soon as LiveKit returns it. When the finished file has an HTTPS location, or `EGRESS_PUBLIC_BASE_URL` plus the object key, a second post adds the URL. Accept, the call, and end still succeed.
+
+| Env | Role |
+| --- | --- |
+| `EGRESS_S3_BUCKET` | Bucket on the StartEgress request. Blank uses storage configured on the LiveKit Cloud project. |
+| `EGRESS_S3_REGION` | Bucket region when `EGRESS_S3_ENDPOINT` is empty. |
+| `EGRESS_S3_ACCESS_KEY` / `EGRESS_S3_SECRET` | Optional when the Cloud project already has storage credentials. |
+| `EGRESS_S3_ENDPOINT` | S3-compatible endpoint, `https://…`. Set `EGRESS_S3_FORCE_PATH_STYLE=true` for non-AWS. |
+| `EGRESS_FILEPATH` | Default `recordings/{room_name}-{time}.mp4`. |
+| `EGRESS_PUBLIC_BASE_URL` | HTTPS origin used when egress reports `s3://bucket/key` instead of an HTTPS location. |
+
+If Cloud egress cannot start, the desk records the customer tile and both microphones and uploads that file on **End session**. The bytes stay in API memory at `GET /sessions/:id/call-recording/file.webm` (or `file.mp4`). The same POST uses `recordingId` `local_…` and that URL. Restarting the API drops the file. Without the three LiveKit variables, recording stays off and the call shell is unchanged.
+
+The stored fields use:
 
 `POST /sessions/:id/recording`
 
@@ -369,4 +385,4 @@ Disposition stub, webhooks set: point `CRM_STUB_WEBHOOK_URL` and `DATALAKE_STUB_
 
 ## Out of scope
 
-OCR, liveness models, IDV, AML, JumpCloud SSO, starting LiveKit egress, Corex, Onboarding, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. Recording is an attached URL and id only. CRM and the datalake are webhook or log stubs.
+OCR, liveness models, IDV, AML, JumpCloud SSO, Corex, Onboarding, long-term recording retention, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. CRM and the datalake are webhook or log stubs.
