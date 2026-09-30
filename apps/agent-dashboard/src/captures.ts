@@ -13,8 +13,9 @@ export type CaptureSubmit = (image: Blob | File | string, options?: CaptureUploa
  *   multipart: field `image` (file), optional `kind` (face|id|other), optional `capturedAt`
  *   JSON:      `{ image: "data:image/jpeg;base64,...", kind?, capturedAt? }`
  *
- * `blobFromVideoFrame` is a thin fallback that paints a `<video>` element to a
- * JPEG Blob. Prefer a LiveKit track grab when you have the remote video track.
+ * Prefer `captureVideoStill` in `./captureStill` for the remote customer
+ * LiveKit track. `blobFromVideoFrame` paints a `<video>` element to a JPEG
+ * when that track is not available.
  */
 export function useCaptureUpload(sessionId: string | null, agentName: string): {
   submit: CaptureSubmit;

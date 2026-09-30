@@ -32,7 +32,8 @@ const NOT_A_JWT =
  * data-active="true" is set when a video track attaches.
  * Cleanup disconnects the room and clears data-active.
  *
- * The agent dashboard and customer webview copies of this hook match on purpose.
+ * The agent dashboard hook matches this connection flow. The desk copy also
+ * keeps the remote customer camera track so the agent can grab a still.
  *
  * Media capture uses plain getUserMedia({ audio: true, video: true }) then
  * publishTrack — LiveKit's setCameraEnabled(true) exact-matches deviceId

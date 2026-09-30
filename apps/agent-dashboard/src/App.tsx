@@ -11,6 +11,7 @@ import {
   type Session,
   type SessionStatus,
 } from "./api";
+import { captureVideoStill } from "./captureStill";
 import { blobFromVideoFrame, useCaptureUpload } from "./captures";
 import { KycWorkspace, OnboardingFacts } from "./kyc";
 import { useLiveKit } from "./livekit";
@@ -413,12 +414,16 @@ export function App() {
 
   async function onCaptureVideo(kind: CaptureKind) {
     const video = remoteRef.current;
-    if (!video) {
+    const track = media?.remoteVideoTrack;
+    const liveTrack = track && track.readyState === "live" ? track : null;
+    if (!liveTrack && !video) {
       setError("Customer video is not on screen.");
       return;
     }
     try {
-      const blob = await blobFromVideoFrame(video);
+      const blob = liveTrack
+        ? await captureVideoStill(liveTrack, { video, mimeType: "image/jpeg" })
+        : await blobFromVideoFrame(video!);
       await onUpload(blob, kind);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not capture the video frame.");

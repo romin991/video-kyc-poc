@@ -31,7 +31,7 @@ pnpm dev
 4. **Browser A.** The session appears in the queue. Click **Accept**.
 5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
 6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
-7. Add a still. **Capture still** grabs the current customer video frame when LiveKit video is actually playing. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays after refresh.
+7. Add a still. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays after refresh.
 8. **Browser A.** Click **End session**.
 9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, and stills.
 10. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
@@ -170,7 +170,7 @@ The checklist starts as three unchecked items: `identity_match`, `liveness_digit
 
 ### Capture upload
 
-WebRTC can grab a still from the customer video track in the browser and post it here. The agent app exposes `uploadSessionCapture` and `useCaptureUpload` in `apps/agent-dashboard/src/captures.ts`. Pass a `Blob`, `File`, or base64/data URL. `blobFromVideoFrame` paints a `<video>` element to a JPEG if you do not have the track handy.
+**Capture still** uses `captureVideoStill` in `apps/agent-dashboard/src/captureStill.ts`. Pass a `MediaStreamTrack` or a LiveKit track (`mediaStreamTrack`). It draws one JPEG or PNG and does not stop the track. The desk posts that blob with `uploadSessionCapture` / `useCaptureUpload` in `apps/agent-dashboard/src/captures.ts` (`Blob`, `File`, or base64/data URL). `blobFromVideoFrame` paints the customer `<video>` when the remote track is not available.
 
 `POST /sessions/:id/captures`
 
