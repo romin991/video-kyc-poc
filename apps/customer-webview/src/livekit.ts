@@ -4,8 +4,18 @@ import {
   RoomEvent,
   Track,
   type LocalTrack,
+  type LocalTrackPublication,
   type RemoteTrack,
 } from "livekit-client";
+import {
+  afterLiveKitReleased,
+  clearLiveKitTiles,
+  releaseLiveKitRoom,
+  scheduleLiveKitRelease,
+  stopTrack,
+  type LiveKitRoomRelease,
+  type StoppableTrack,
+} from "../../api/src/callMediaRelease";
 
 export interface LiveKitMedia {
   serverUrl: string | null;
@@ -30,7 +40,12 @@ const NOT_A_JWT =
  * Local camera attaches to [data-livekit="local"] and stays muted.
  * Remote camera and microphone attach to [data-livekit="remote"].
  * data-active="true" is set when a video track attaches.
- * Cleanup disconnects the room and clears data-active.
+ *
+ * Cleanup runs when the session leaves in_call (the agent ended it, or this
+ * page unmounts). It disconnects the room, unpublishes and unsubscribes, stops
+ * and detaches local camera and mic tracks (including a getUserMedia that has
+ * not finished publishing), and revokes blob: URLs on the tiles. The next
+ * connect waits until that release finishes.
  *
  * The agent dashboard hook matches this connection flow. The desk copy also
  * keeps the remote customer camera track so the agent can grab a still.
@@ -62,45 +77,73 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     }
 
     let cancelled = false;
+    let released = false;
+    const ownedTracks: MediaStreamTrack[] = [];
     const room = new Room();
+    const previousRelease = afterLiveKitReleased();
 
     const onSubscribed = (track: RemoteTrack) => {
+      if (cancelled || released) return;
       attachRemote(track);
     };
 
-    room.on(RoomEvent.TrackSubscribed, onSubscribed);
-    room.on(RoomEvent.LocalTrackPublished, (publication) => {
+    const onLocalPublished = (publication: LocalTrackPublication) => {
+      if (cancelled || released) return;
       if (publication.source !== Track.Source.Camera || !publication.track) return;
       attachLocal(publication.track);
-    });
+    };
+
+    room.on(RoomEvent.TrackSubscribed, onSubscribed);
+    room.on(RoomEvent.LocalTrackPublished, onLocalPublished);
+
+    const releaseNow = () => {
+      if (released) return;
+      released = true;
+      for (const track of ownedTracks) stopTrack(track);
+      room.off(RoomEvent.TrackSubscribed, onSubscribed);
+      room.off(RoomEvent.LocalTrackPublished, onLocalPublished);
+      clearTiles();
+      scheduleLiveKitRelease(async () => {
+        try {
+          await releaseLiveKitRoom(asReleaseRoom(room), ownedTracks);
+          console.info("[vkyc] LiveKit room released");
+        } catch (error) {
+          console.error("[vkyc] LiveKit release failed", error);
+        } finally {
+          for (const track of ownedTracks) stopTrack(track);
+          clearTiles();
+        }
+      });
+    };
 
     const connect = async () => {
       try {
+        await previousRelease;
+        if (cancelled || released) return;
         await room.connect(serverUrl, token);
-        if (cancelled) {
-          room.disconnect();
-          return;
-        }
+        if (cancelled || released) return;
         setMediaConnected(true);
         setMediaError(null);
         try {
-          await publishLocalAv(room);
+          await publishLocalAv(room, ownedTracks, () => cancelled || released);
         } catch (error) {
           console.error("[vkyc] local A/V publish failed", error);
         }
-        if (cancelled) return;
+        if (cancelled || released) return;
         room.remoteParticipants.forEach((participant) => {
           participant.trackPublications.forEach((publication) => {
             if (publication.track) attachRemote(publication.track);
           });
         });
       } catch (error) {
-        if (cancelled) return;
-        const message = error instanceof Error ? error.message : "LiveKit connection failed";
-        console.error("[vkyc] Room.connect failed", error);
-        setMediaConnected(false);
-        setMediaError(message);
-        room.disconnect();
+        if (released) return;
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "LiveKit connection failed";
+          console.error("[vkyc] Room.connect failed", error);
+          setMediaConnected(false);
+          setMediaError(message);
+        }
+        releaseNow();
       }
     };
 
@@ -108,8 +151,7 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
 
     return () => {
       cancelled = true;
-      room.disconnect();
-      clearTiles();
+      releaseNow();
     };
   }, [roomName, token, serverUrl]);
 
@@ -125,8 +167,28 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
   };
 }
 
-async function publishLocalAv(room: Room): Promise<void> {
+function asReleaseRoom(room: Room): LiveKitRoomRelease {
+  return {
+    localParticipant: {
+      trackPublications: room.localParticipant.trackPublications,
+      unpublishTrack: (track: StoppableTrack, stopOnUnpublish?: boolean) =>
+        room.localParticipant.unpublishTrack(track as LocalTrack, stopOnUnpublish),
+    },
+    remoteParticipants: room.remoteParticipants,
+    disconnect: (stopTracks?: boolean) => room.disconnect(stopTracks),
+    removeAllListeners: () => {
+      room.removeAllListeners();
+    },
+  };
+}
+
+async function publishLocalAv(
+  room: Room,
+  ownedTracks: MediaStreamTrack[],
+  isCancelled: () => boolean,
+): Promise<void> {
   const devices = await navigator.mediaDevices.enumerateDevices();
+  if (isCancelled()) return;
   const inputs = devices.filter((d) => d.kind === "audioinput" || d.kind === "videoinput");
   console.info(
     "[vkyc] media devices",
@@ -139,23 +201,34 @@ async function publishLocalAv(room: Room): Promise<void> {
   }
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+  const tracks = stream.getTracks();
+  for (const track of tracks) ownedTracks.push(track);
+  if (isCancelled()) {
+    for (const track of tracks) stopTrack(track);
+    return;
+  }
   try {
     for (const mediaTrack of stream.getAudioTracks()) {
+      if (isCancelled()) break;
       await room.localParticipant.publishTrack(mediaTrack, {
         source: Track.Source.Microphone,
         name: mediaTrack.label || "microphone",
       });
     }
     for (const mediaTrack of stream.getVideoTracks()) {
+      if (isCancelled()) break;
       const publication = await room.localParticipant.publishTrack(mediaTrack, {
         source: Track.Source.Camera,
         name: mediaTrack.label || "camera",
       });
-      if (publication.track) attachLocal(publication.track);
+      if (publication.track && !isCancelled()) attachLocal(publication.track);
     }
   } catch (error) {
-    stream.getTracks().forEach((t) => t.stop());
+    for (const track of tracks) stopTrack(track);
     throw error;
+  }
+  if (isCancelled()) {
+    for (const track of tracks) stopTrack(track);
   }
 }
 
@@ -184,8 +257,7 @@ function attachRemote(track: RemoteTrack): void {
 }
 
 function clearTiles(): void {
-  document.querySelectorAll<HTMLVideoElement>("[data-livekit]").forEach((element) => {
-    delete element.dataset.active;
-    element.srcObject = null;
+  clearLiveKitTiles(document.querySelectorAll<HTMLVideoElement>("[data-livekit]"), (url) => {
+    URL.revokeObjectURL(url);
   });
 }
