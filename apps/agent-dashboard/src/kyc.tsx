@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { captureSrc, type CaptureKind, type CaptureSummary, type ChecklistItem, type Disposition, type OnboardingPayload } from "./api";
 
 const KINDS: { value: CaptureKind; label: string }[] = [
@@ -44,11 +43,13 @@ export function KycWorkspace({
   captures,
   notes,
   disposition,
+  kind,
   busy,
   capturePending,
   onToggle,
   onNotes,
   onNotesBlur,
+  onKind,
   onUpload,
   onCaptureVideo,
   onDisposition,
@@ -59,16 +60,17 @@ export function KycWorkspace({
   captures: CaptureSummary[];
   notes: string;
   disposition: Disposition | null;
+  kind: CaptureKind;
   busy: boolean;
   capturePending: boolean;
   onToggle: (id: string, checked: boolean) => void;
   onNotes: (value: string) => void;
   onNotesBlur?: () => void;
+  onKind: (kind: CaptureKind) => void;
   onUpload: (file: File, kind: CaptureKind) => void;
   onCaptureVideo?: (kind: CaptureKind) => void;
   onDisposition: (value: Disposition) => void;
 }) {
-  const [kind, setKind] = useState<CaptureKind>("face");
   const needsStill = captures.length === 0;
 
   return (
@@ -110,7 +112,11 @@ export function KycWorkspace({
           <div className="capture-actions">
             <label className="kind-field">
               <span>Kind</span>
-              <select value={kind} onChange={(event) => setKind(event.target.value as CaptureKind)}>
+              <select
+                data-kyc="capture-kind"
+                value={kind}
+                onChange={(event) => onKind(event.target.value as CaptureKind)}
+              >
                 {KINDS.map((item) => (
                   <option key={item.value} value={item.value}>
                     {item.label}
@@ -138,6 +144,11 @@ export function KycWorkspace({
               />
             </label>
           </div>
+          {phase === "call" && kind === "id" ? (
+            <p className="muted" data-kyc="id-guide">
+              ID guide is on. The customer is asked to align ID inside the box.
+            </p>
+          ) : null}
           {captures.length === 0 ? (
             <p className="muted">No stills yet. Capture the customer video, or add a JPEG or PNG.</p>
           ) : (

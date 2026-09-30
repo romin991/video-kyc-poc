@@ -36,18 +36,35 @@ function Shell({ children }: { children: ReactNode }) {
   );
 }
 
+function IdCaptureGuide() {
+  return (
+    <div className="id-guide" data-capture-guide="id" role="status">
+      <p className="id-guide-copy">align ID inside the box</p>
+      <div className="id-frame" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
 function VideoTile({
   label,
   slot,
   videoRef,
+  idGuide = false,
 }: {
   label: string;
   slot: "local" | "remote";
   videoRef?: Ref<HTMLVideoElement>;
+  idGuide?: boolean;
 }) {
   return (
     <section className={`tile tile-${slot}`} aria-label={label}>
       <video ref={videoRef} data-livekit={slot} autoPlay muted={slot === "local"} playsInline />
+      {slot === "local" && idGuide ? <IdCaptureGuide /> : null}
       <div className="tile-fallback">
         <span className="avatar" aria-hidden="true">
           {label.slice(0, 1)}
@@ -139,6 +156,8 @@ function JoinScreen({ token }: { token: string }) {
     );
   }
 
+  const idGuide = info.captureGuide === "id";
+
   return (
     <div className="call">
       <div className="call-head">
@@ -148,9 +167,9 @@ function JoinScreen({ token }: { token: string }) {
         </div>
         <span className="live">Live</span>
       </div>
-      <div className="stage">
+      <div className={idGuide ? "stage stage-id-guide" : "stage"} data-capture-guide={idGuide ? "id" : "off"}>
         <VideoTile label="Agent" slot="remote" videoRef={remoteRef} />
-        <VideoTile label="You" slot="local" />
+        <VideoTile label="You" slot="local" idGuide={idGuide} />
       </div>
       <div className="media-note">
         <p>

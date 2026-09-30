@@ -40,6 +40,7 @@ export interface Session {
   checklist: ChecklistItem[];
   acwNotes: string;
   disposition: Disposition | null;
+  captureGuide: CaptureKind | null;
   captures: CaptureSummary[];
 }
 
@@ -59,6 +60,7 @@ export interface SessionPatch {
   checklist?: { id: string; checked: boolean }[];
   acwNotes?: string;
   disposition?: Disposition | null;
+  captureGuide?: CaptureKind | null;
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:3001").replace(/\/$/, "");

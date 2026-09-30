@@ -28,6 +28,7 @@ export interface SessionPatch {
   checklist?: { id: string; checked: boolean }[];
   acwNotes?: string;
   disposition?: Disposition | null;
+  captureGuide?: CaptureKind | null;
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
@@ -138,7 +139,24 @@ export function parsePatch(body: unknown): ParseResult<SessionPatch> {
     }
   }
 
+  if ("captureGuide" in body) {
+    const guide = parseCaptureGuide(body.captureGuide);
+    if (!guide.ok) return guide;
+    patch.captureGuide = guide.value;
+  }
+
   return { ok: true, value: patch };
+}
+
+/** `id` shows the customer card guide. `face`, `other`, and `null` hide it. */
+export function parseCaptureGuide(value: unknown): ParseResult<CaptureKind | null> {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || !value.trim()) {
+    return { ok: false, message: "captureGuide must be face, id, other, or null" };
+  }
+  const mapped = KINDS[value.trim().toLowerCase()];
+  if (!mapped) return { ok: false, message: "captureGuide must be face, id, other, or null" };
+  return { ok: true, value: mapped };
 }
 
 export function parseCaptureMeta(

@@ -253,6 +253,71 @@ test("checklist, notes, captures, and disposition survive a refresh", async () =
   });
 });
 
+test("ID capture guide follows the desk kind and stills keep their own kind", async () => {
+  await withApi(async (base) => {
+    const created = await api(base, "/sessions", { method: "POST" });
+    assert.equal(created.status, 201);
+    assert.equal(created.body?.captureGuide, null);
+    const id = String(created.body?.id);
+    const joinToken = String(created.body?.joinToken);
+
+    const idGuide = await api(base, `/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ captureGuide: "ID" }),
+    });
+    assert.equal(idGuide.status, 200);
+    assert.equal(idGuide.body?.captureGuide, "id");
+
+    const join = await api(base, `/join/${joinToken}`);
+    assert.equal(join.status, 200);
+    assert.equal(join.body?.captureGuide, "id");
+
+    const uploaded = await api(base, `/sessions/${id}/captures`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        image: `data:image/png;base64,${ID_PNG.toString("base64")}`,
+        kind: "id",
+      }),
+    });
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploaded.body?.kind, "id");
+
+    const face = await api(base, `/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ captureGuide: "face" }),
+    });
+    assert.equal(face.status, 200);
+    assert.equal(face.body?.captureGuide, "face");
+    const faceJoin = await api(base, `/join/${joinToken}`);
+    assert.equal(faceJoin.body?.captureGuide, "face");
+
+    const cleared = await api(base, `/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ captureGuide: null }),
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body?.captureGuide, null);
+
+    const bad = await api(base, `/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ captureGuide: "liveness" }),
+    });
+    assert.equal(bad.status, 400);
+    const afterBad = await api(base, `/sessions/${id}`);
+    assert.equal(afterBad.body?.captureGuide, null);
+    const captures = afterBad.body?.captures as Array<{ kind: string }>;
+    assert.deepEqual(
+      captures.map((item) => item.kind),
+      ["id"],
+    );
+  });
+});
+
 test("capture upload and patch reject an unknown session", async () => {
   await withApi(async (base) => {
     const missing = await api(base, "/sessions/missing/captures", {
