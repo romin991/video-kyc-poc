@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { SessionStore } from "./sessions.js";
-import { stubParticipantToken } from "./tokens.js";
+import { participantToken } from "./tokens.js";
 import type { Session, SessionResponse, SessionStatus } from "./types.js";
 
 const STATUSES: readonly SessionStatus[] = ["waiting", "in_call", "ended"];
@@ -62,7 +62,9 @@ function sendError(res: Response, status: number, error: string, message: string
  *   POST /sessions/:id/end    -> { status: "ended" }
  *   GET  /join/:token         -> { roomName, customerToken, status }
  *
- * Participant tokens are `lk-stub-…` placeholders. See tokens.ts.
+ * Participant tokens are LiveKit JWTs when LIVEKIT_API_KEY and
+ * LIVEKIT_API_SECRET are set. Otherwise they are `lk-stub-…` placeholders
+ * and the call shell stays up. See tokens.ts.
  */
 export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
@@ -125,7 +127,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json(toResponse(session, origin));
   });
 
-  app.post("/sessions/:id/accept", (req, res) => {
+  app.post("/sessions/:id/accept", async (req, res) => {
     const result = store.accept(req.params.id);
     if (!result.ok && result.error === "not_found") {
       sendError(res, 404, "not_found", "Session not found");
@@ -143,7 +145,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json({
       sessionId: result.session.id,
       roomName: result.session.roomName,
-      agentToken: stubParticipantToken("agent", result.session.roomName),
+      agentToken: await participantToken("agent", result.session.roomName),
       status: "in_call" as const,
     });
   });
@@ -157,7 +159,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json({ status: "ended" as const, sessionId: result.session.id });
   });
 
-  app.get("/join/:token", (req, res) => {
+  app.get("/join/:token", async (req, res) => {
     const session = store.getByToken(req.params.token);
     if (!session) {
       sendError(res, 404, "not_found", "Join link not found");
@@ -166,7 +168,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json({
       sessionId: session.id,
       roomName: session.roomName,
-      customerToken: stubParticipantToken("customer", session.roomName),
+      customerToken: await participantToken("customer", session.roomName),
       status: session.status,
     });
   });
