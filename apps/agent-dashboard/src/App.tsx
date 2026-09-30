@@ -8,7 +8,7 @@ import {
   type Session,
   type SessionStatus,
 } from "./api";
-import { useLiveKitStub } from "./livekit";
+import { useLiveKit } from "./livekit";
 
 const POLL_MS = 2000;
 const NAME_KEY = "vkyc.agentName";
@@ -116,7 +116,7 @@ export function App() {
   const nameRef = useRef("Demo agent");
   nameRef.current = name.trim() || "Demo agent";
 
-  const media = useLiveKitStub(call?.roomName ?? null, call?.agentToken ?? null);
+  const media = useLiveKit(call?.roomName ?? null, call?.agentToken ?? null);
   const spotlight = sessions.find((session) => session.id === spotlightId) ?? null;
   const openSessions = sessions.filter((session) => session.status !== "ended");
   const waitingCount = openSessions.filter((session) => session.status === "waiting").length;
@@ -311,12 +311,13 @@ export function App() {
           </div>
           <div className="media-note">
             <p>
-              Media stub. Agent token <code>{call.agentToken}</code>
-            </p>
-            <p>
-              {media?.serverUrl
-                ? `LiveKit URL configured (${media.serverUrl}). Room.connect is still a TODO.`
-                : "VITE_LIVEKIT_URL is empty. Cameras stay off until LiveKit is wired."}
+              {media?.mediaConnected
+                ? "LiveKit connected."
+                : media?.mediaError
+                  ? media.mediaError
+                  : media?.serverUrl
+                    ? "Connecting to LiveKit…"
+                    : "VITE_LIVEKIT_URL is empty. Cameras stay off. The session shell still works."}
             </p>
             <button type="button" className="ghost" onClick={() => void remoteRef.current?.play()}>
               Enable remote audio

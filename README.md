@@ -1,8 +1,8 @@
 # Superbank Video KYC POC
 
-P0 session shell for a video KYC proof of concept. An agent creates a verification session, the customer opens a join link, the agent accepts from the queue, both sides enter a call shell, and the agent ends the session.
+P0 session shell for a video KYC proof of concept. An agent creates a verification session, the customer opens a join link, the agent accepts from the queue, both sides enter a call, and the agent ends the session.
 
-LiveKit room names and participant tokens are placeholders (`lk-stub-…`). Cameras and microphones stay off. OCR, liveness, IDV, AML, SSO, and production hardening are out of scope.
+When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness, IDV, AML, SSO, and production hardening are out of scope.
 
 ## Two-browser local run
 
@@ -29,7 +29,7 @@ pnpm dev
 2. Click **Create session**. Copy the customer join link. It looks like `http://localhost:5174/join/<token>`.
 3. **Browser B (customer).** Paste that link. The page should say **Waiting for an agent**. Leave it open.
 4. **Browser A.** The session appears in the queue. Click **Accept**.
-5. Both windows show the in-call shell: a remote tile and a local tile. Tokens look like `lk-stub-agent-…` and `lk-stub-customer-…`. No camera permission prompt is expected.
+5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
 6. **Browser A.** Click **End session**.
 7. Browser A leaves the call stage. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
 
@@ -43,6 +43,38 @@ pnpm dev:customer
 
 The API keeps sessions in memory. Restarting it drops the queue and invalidates open join links.
 
+## LiveKit
+
+Create a free project at [LiveKit Cloud](https://cloud.livekit.io). The free tier is enough for this proof of concept. After the project exists:
+
+1. Copy the project WebSocket URL from the project page. It looks like `wss://your-project.livekit.cloud`.
+2. Open **Settings → Keys** and copy the API key and API secret. See [where to find the key and secret](https://community.livekit.io/t/where-to-find-the-livekit-api-key-and-secret/92).
+3. Put them in a repo-root `.env`. That file is gitignored. `.env.example` lists the names.
+
+```bash
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=your_api_key
+LIVEKIT_API_SECRET=your_api_secret
+VITE_LIVEKIT_URL=wss://your-project.livekit.cloud
+```
+
+`VITE_LIVEKIT_URL` is the same WebSocket URL as `LIVEKIT_URL`. Restart `pnpm dev` after changing `.env`. Vite reads `VITE_*` at startup. The API loads the repo-root `.env` when it starts and does not override variables already set in the environment.
+
+The API mints a LiveKit JWT with `livekit-server-sdk`:
+
+| Claim | Value |
+| --- | --- |
+| identity | `agent` or `customer` |
+| `roomJoin` | true |
+| `room` | `vkyc-<sessionId>` |
+| `canPublish` | true |
+| `canSubscribe` | true |
+| TTL | 10 minutes |
+
+The same token is reused for a role and room until it is close to expiry, so the customer's join poll does not reconnect the call. Use headphones if both browsers are on one machine. The local tile stays muted.
+
+If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return `lk-stub-…` and do not throw. If `VITE_LIVEKIT_URL` is missing, the browser skips `Room.connect`. Either way the session shell still creates, accepts, joins, and ends.
+
 ## Signaling
 
 | Method | Path | Result |
@@ -55,7 +87,7 @@ The API keeps sessions in memory. Restarting it drops the queue and invalidates 
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api" }` |
 
-`agentToken` and `customerToken` are stub strings, not LiveKit JWTs. A second accept returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` and is not checked.
+`agentToken` and `customerToken` are LiveKit JWTs when the API key and secret are set, and `lk-stub-…` strings otherwise. A second accept returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` and is not checked.
 
 ```bash
 curl -s -X POST http://127.0.0.1:3001/sessions \
@@ -72,38 +104,34 @@ sequenceDiagram
   Agent->>API: POST /sessions
   API-->>Agent: id, joinUrl, status=waiting
   Customer->>API: GET /join/:token
-  API-->>Customer: status=waiting, customerToken stub
+  API-->>Customer: status=waiting, customerToken
   Agent->>API: POST /sessions/:id/accept
-  API-->>Agent: roomName, agentToken stub
+  API-->>Agent: roomName, agentToken
   Customer->>API: GET /join/:token
   API-->>Customer: status=in_call
-  Note over Agent,Customer: Call shell only. LiveKit connect is a TODO.
+  Note over Agent,Customer: Both Room.connect to vkyc-sessionId when LiveKit env is set
   Agent->>API: POST /sessions/:id/end
   API-->>Agent: status=ended
   Customer->>API: GET /join/:token
   API-->>Customer: status=ended
 ```
 
-## LiveKit handoff
-
-Wire media in both hooks (they match on purpose):
-
-- `apps/agent-dashboard/src/livekit.ts`
-- `apps/customer-webview/src/livekit.ts`
-
-Mint real tokens in `apps/api/src/tokens.ts` (`stubParticipantToken`). Room names are already `vkyc-<sessionId>`.
+## Call tiles
 
 Each call shell renders:
 
 - `<video data-livekit="remote">` for the other participant
 - `<video data-livekit="local" muted>` for this participant
 
-Those elements stay hidden until `data-active="true"` is set after `track.attach(...)`. Set `VITE_LIVEKIT_URL` (see `.env.example`) when a LiveKit server exists. The hook reads it and still does not connect.
+Those elements stay hidden until `data-active="true"` is set after a video track attaches. The hooks that do this match on purpose:
+
+- `apps/agent-dashboard/src/livekit.ts`
+- `apps/customer-webview/src/livekit.ts`
 
 ## Layout
 
 ```
-apps/api                 Express session store and REST
+apps/api                 Express session store, REST, LiveKit token mint
 apps/agent-dashboard     Vite + React desk (create, queue, accept, end)
 apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ```
@@ -111,7 +139,7 @@ apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ## Scripts
 
 ```bash
-pnpm test       # API lifecycle tests
+pnpm test       # API lifecycle tests, plus JWT mint tests (no live LiveKit server)
 pnpm typecheck  # tsc for all apps
 pnpm build      # production bundles for both UIs
 ```
@@ -120,4 +148,4 @@ Optional environment variables are listed in `.env.example`. Defaults match the 
 
 ## Out of scope
 
-Real LiveKit rooms, camera capture, OCR, liveness, IDV, AML, SSO, persistence, and production hardening.
+OCR, liveness, IDV, AML, SSO, persistence, and production hardening.

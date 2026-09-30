@@ -5,6 +5,11 @@ import test from "node:test";
 import { createApp } from "./app.js";
 import { SessionStore } from "./sessions.js";
 
+// These tests lock the shell that runs without a LiveKit project.
+// Real credentials are covered in tokens.test.ts and must not leak in here.
+delete process.env.LIVEKIT_API_KEY;
+delete process.env.LIVEKIT_API_SECRET;
+
 interface ApiResult {
   status: number;
   body: Record<string, unknown> | null;

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { ApiError, fetchJoin, type JoinInfo } from "./api";
-import { useLiveKitStub } from "./livekit";
+import { useLiveKit } from "./livekit";
 
 const POLL_MS = 1500;
 
@@ -94,7 +94,7 @@ function JoinScreen({ token }: { token: string }) {
     };
   }, [token]);
 
-  const media = useLiveKitStub(
+  const media = useLiveKit(
     info?.status === "in_call" ? info.roomName : null,
     info?.status === "in_call" ? info.customerToken : null,
   );
@@ -154,12 +154,13 @@ function JoinScreen({ token }: { token: string }) {
       </div>
       <div className="media-note">
         <p>
-          Media stub. Token <code>{info.customerToken}</code>
-        </p>
-        <p>
-          {media?.serverUrl
-            ? `LiveKit URL configured (${media.serverUrl}). Room.connect is still a TODO.`
-            : "Camera and microphone stay off until LiveKit is wired."}
+          {media?.mediaConnected
+            ? "LiveKit connected."
+            : media?.mediaError
+              ? media.mediaError
+              : media?.serverUrl
+                ? "Connecting to LiveKit…"
+                : "Camera and microphone stay off until VITE_LIVEKIT_URL is set. You can keep this window open."}
         </p>
         {problem ? <p className="problem">{problem} Retrying…</p> : null}
         <button type="button" className="ghost" onClick={() => void remoteRef.current?.play()}>
