@@ -212,6 +212,7 @@ h2 {
 .media-note {
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .panel-head {
@@ -402,14 +403,25 @@ button.danger {
 }
 
 @media (max-width: 860px) {
+  .app {
+    width: min(1120px, calc(100% - 24px));
+  }
+
   .topbar,
+  .top-meta,
   .desk,
   .queue-item {
     display: grid;
+    grid-template-columns: 1fr;
   }
 
-  .top-meta {
+  .top-meta,
+  .queue-item {
     align-items: stretch;
+  }
+
+  .queue-actions {
+    justify-content: flex-start;
   }
 
   .identity input {
