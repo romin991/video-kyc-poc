@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import { decodeImage, parseCaptureMeta, parseOnboarding, parsePatch, parseRecordingAttach } from "./kyc.js";
+import type { CallRecorder } from "./recording.js";
 import { SessionStore } from "./sessions.js";
 import { deliverDispositionStubs, resolveStubConfig, type DispositionStubBody, type StubOverrides } from "./stubs.js";
 import { participantToken } from "./tokens.js";
@@ -13,6 +14,12 @@ const imageUpload = multer({
   limits: { fileSize: 4 * 1024 * 1024, files: 1 },
 });
 
+const RECORDING_MAX_BYTES = 40 * 1024 * 1024;
+const videoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: RECORDING_MAX_BYTES, files: 1 },
+});
+
 export interface AppOptions {
   customerAppOrigin?: string;
   corsOrigins?: string[];
@@ -22,6 +29,8 @@ export interface AppOptions {
    * fields log instead, even if CRM_STUB_WEBHOOK_URL is present in the environment.
    */
   stubs?: StubOverrides;
+  /** LiveKit egress for the in-call room. Omitted when LiveKit credentials are unset. */
+  recording?: CallRecorder;
 }
 
 const DEFAULT_CORS = [
@@ -147,6 +156,17 @@ function isCapturePost(req: Request): boolean {
   return req.method === "POST" && /^\/sessions\/[^/]+\/captures$/.test(req.path);
 }
 
+function isRecordingPost(req: Request): boolean {
+  return req.method === "POST" && /^\/sessions\/[^/]+\/call-recording$/.test(req.path);
+}
+
+function videoContentType(mime: string): "video/webm" | "video/mp4" | null {
+  const base = mime.split(";")[0]?.trim().toLowerCase();
+  if (base === "video/webm") return "video/webm";
+  if (base === "video/mp4") return "video/mp4";
+  return null;
+}
+
 function captureParser(req: Request, res: Response, next: NextFunction): void {
   const type = req.header("content-type") ?? "";
   if (type.includes("multipart/form-data")) {
@@ -181,7 +201,15 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   POST /sessions/claim           -> oldest waiting session, status "in_call"
  *   POST /sessions/:id/accept      -> that waiting session, status "in_call"
  *   POST /sessions/:id/end         -> { status: "ended" }
+ *   GET  /sessions/:id/call-recording -> { mode, recordingId }
+ *   POST /sessions/:id/call-recording -> fallback webm/mp4 when Cloud egress is unavailable
+ *   GET  /sessions/:id/call-recording/file -> fallback recording bytes
  *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide, queuePosition }
+ *
+ * Call recording starts a LiveKit room-composite egress when the in-call room
+ * exists, and stops it when the session ends. The egress id and file URL are
+ * sent with PATCH /sessions/:id/recording. That route is owned by eng and is
+ * not implemented here. GET /sessions/:id does not add recording fields.
  *
  * Creating a session always leaves it waiting. Claim and accept are the only
  * ways into in_call, and each one takes a single waiting session. GET
@@ -210,6 +238,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
   const corsOrigins = options.corsOrigins ?? readList(process.env.CORS_ORIGINS, DEFAULT_CORS);
   const stubs = resolveStubConfig(process.env, options.stubs);
+  const recording = options.recording;
   const app = express();
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
@@ -239,7 +268,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     });
   }
   app.use((req, res, next) => {
-    if (isCapturePost(req)) {
+    if (isCapturePost(req) || isRecordingPost(req)) {
       next();
       return;
     }
@@ -391,6 +420,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       );
       return;
     }
+    recording?.onInCall({ id: result.session.id, roomName: result.session.roomName });
     res.json(await claimedCall(result.session, origin));
   });
 
@@ -409,6 +439,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       );
       return;
     }
+    recording?.onInCall({ id: result.session.id, roomName: result.session.roomName });
     res.json(await claimedCall(result.session, origin));
   });
 
@@ -418,7 +449,68 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 404, "not_found", "Session not found");
       return;
     }
+    if (recording) {
+      void recording.onEnded({ id: result.session.id, roomName: result.session.roomName }).catch((error: unknown) => {
+        console.error("[vkyc] recording finish failed", error instanceof Error ? error.message : error);
+      });
+    }
     res.json({ status: "ended" as const, sessionId: result.session.id });
+  });
+
+  app.get("/sessions/:id/call-recording", (req, res) => {
+    const session = store.get(req.params.id);
+    if (!session) {
+      sendError(res, 404, "not_found", "Session not found");
+      return;
+    }
+    res.json(recording?.status(session.id) ?? { mode: "off" as const, recordingId: null });
+  });
+
+  app.post("/sessions/:id/call-recording", videoUpload.single("video"), (req, res) => {
+    const session = store.get(req.params.id);
+    if (!session) {
+      sendError(res, 404, "not_found", "Session not found");
+      return;
+    }
+    if (!recording) {
+      sendError(res, 409, "conflict", "Call recording is off until LiveKit credentials are set");
+      return;
+    }
+    const file = (req as Request & { file?: { buffer?: Buffer; mimetype?: string } }).file;
+    if (!file?.buffer) {
+      sendError(res, 400, "bad_request", "video file is required (multipart field video)");
+      return;
+    }
+    const contentType = videoContentType(file.mimetype ?? "");
+    if (!contentType) {
+      sendError(res, 400, "bad_request", "Recording must be video/webm or video/mp4");
+      return;
+    }
+    const recordingUrl = `${req.protocol}://${req.get("host") ?? "localhost:3001"}/sessions/${session.id}/call-recording/file`;
+    void recording
+      .saveFallback(session.id, { bytes: file.buffer, contentType, recordingUrl })
+      .then((saved) => {
+        if (!saved.ok) {
+          sendError(res, saved.status, saved.status === 400 ? "bad_request" : "conflict", saved.message);
+          return;
+        }
+        res.status(201).json({ recordingId: saved.recordingId, recordingUrl: saved.recordingUrl });
+      })
+      .catch((error: unknown) => {
+        console.error("[vkyc] fallback recording failed", error instanceof Error ? error.message : error);
+        if (!res.headersSent) sendError(res, 500, "error", "Could not store the call recording");
+      });
+  });
+
+  app.get("/sessions/:id/call-recording/file", (req, res) => {
+    const file = recording?.fallbackFile(req.params.id);
+    if (!file) {
+      sendError(res, 404, "not_found", "Recording not found");
+      return;
+    }
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Content-Length", String(file.bytes.length));
+    res.send(file.bytes);
   });
 
   app.get("/join/:token", async (req, res) => {
@@ -441,13 +533,19 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     sendError(res, 404, "not_found", "Route not found");
   });
 
-  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
     if (err instanceof SyntaxError) {
       sendError(res, 400, "bad_request", "Invalid JSON body");
       return;
     }
     if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
-      sendError(res, 413, "payload_too_large", "Image must be 4 MB or smaller");
+      const recordingUpload = isRecordingPost(req);
+      sendError(
+        res,
+        413,
+        "payload_too_large",
+        recordingUpload ? "Recording must be 40 MB or smaller" : "Image must be 4 MB or smaller",
+      );
       return;
     }
     if (err instanceof multer.MulterError) {

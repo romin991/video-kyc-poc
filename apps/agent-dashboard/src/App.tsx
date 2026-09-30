@@ -13,6 +13,7 @@ import {
   type Session,
   type SessionStatus,
 } from "./api";
+import { useCallRecording } from "./callRecording";
 import { captureVideoStill } from "./captureStill";
 import { blobFromVideoFrame, useCaptureUpload } from "./captures";
 import { KycWorkspace, OnboardingFacts } from "./kyc";
@@ -63,6 +64,14 @@ function readCall(): ActiveCall | null {
   } catch {
     return null;
   }
+}
+
+function recordingNote(mode: "off" | "pending" | "egress" | "fallback" | "stopped" | "unknown"): string {
+  if (mode === "egress") return " Call recording is on.";
+  if (mode === "pending") return " Call recording is starting.";
+  if (mode === "fallback") return " Cloud egress is unavailable, so this browser is recording the call.";
+  if (mode === "stopped") return " Call recording stopped.";
+  return "";
 }
 
 function statusLabel(status: SessionStatus): string {
@@ -143,6 +152,7 @@ export function App() {
   const focusId = call?.sessionId ?? acwId;
   const captures = useCaptureUpload(focusId, nameRef.current);
   const media = useLiveKit(call?.roomName ?? null, call?.agentToken ?? null);
+  const recording = useCallRecording(call?.sessionId ?? null, nameRef.current, media?.mediaConnected === true);
   const spotlight = sessions.find((session) => session.id === spotlightId) ?? null;
   const focusSession = sessions.find((session) => session.id === focusId) ?? null;
   const waitingSessions = sessions
@@ -384,6 +394,11 @@ export function App() {
       setError(err instanceof Error ? err.message : "Could not save notes.");
     }
     try {
+      await recording.stopAndUpload(sessionId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not upload the call recording.");
+    }
+    try {
       await mutate(async () => {
         await endSession(sessionId, nameRef.current);
         setSessions((current) =>
@@ -612,6 +627,7 @@ export function App() {
                   : media?.serverUrl
                     ? "Connecting to LiveKit…"
                     : "VITE_LIVEKIT_URL is empty. Cameras stay off. The session shell still works."}
+              {recordingNote(recording.mode)}
             </p>
             <button type="button" className="ghost" onClick={() => void remoteRef.current?.play()}>
               Enable remote audio

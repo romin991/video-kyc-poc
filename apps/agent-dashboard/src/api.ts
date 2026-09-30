@@ -145,6 +145,29 @@ export function endSession(id: string, agentName: string): Promise<EndResult> {
   return request(`/sessions/${id}/end`, agentName, { method: "POST" });
 }
 
+export type CallRecordingMode = "off" | "pending" | "egress" | "fallback" | "stopped";
+
+export interface CallRecordingStatus {
+  mode: CallRecordingMode;
+  recordingId: string | null;
+}
+
+export interface CallRecordingUpload {
+  recordingId: string;
+  recordingUrl: string;
+}
+
+export function getCallRecording(sessionId: string, agentName: string): Promise<CallRecordingStatus> {
+  return request(`/sessions/${sessionId}/call-recording`, agentName);
+}
+
+export function uploadCallRecording(sessionId: string, agentName: string, video: Blob): Promise<CallRecordingUpload> {
+  const form = new FormData();
+  const type = video.type.split(";")[0] || "video/webm";
+  form.append("video", new File([video], type === "video/mp4" ? "call.mp4" : "call.webm", { type }));
+  return request(`/sessions/${sessionId}/call-recording`, agentName, { method: "POST", body: form });
+}
+
 export interface CaptureUploadOptions {
   kind?: CaptureKind;
   capturedAt?: string;
