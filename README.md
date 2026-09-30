@@ -1,6 +1,6 @@
 # Superbank Video KYC POC
 
-Video KYC proof of concept. An agent creates a verification session, the customer opens a join link, the agent accepts from the queue, both sides enter a call, and the agent ends the session. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session.
+Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session.
 
 When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness models, IDV, AML, SSO, and production hardening are out of scope. The checklist is a manual checkbox, not a model.
 
@@ -28,7 +28,7 @@ pnpm dev
 1. **Browser A (agent).** Open http://127.0.0.1:5173. The demo name in the header is a display label, not a login.
 2. Click **Create session**. Copy the customer join link. It looks like `http://localhost:5174/join/<token>`.
 3. **Browser B (customer).** Paste that link. The page should say **Waiting for an agent**. Leave it open.
-4. **Browser A.** The session appears in the queue. Click **Accept**.
+4. **Browser A.** The session appears in the waiting queue. Click **Claim**, or **Claim next** for the oldest waiting session. Creating another session while this one is still waiting leaves both in the queue. Claiming one does not remove the other.
 5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
 6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
 7. Set **Kind** to **ID**. Within about 1.5s, Browser B shows the customer camera full-frame with a card outline and the line “align ID inside the box”. **Face** or **Other** removes it. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. It uploads with the kind selected on the desk, including `id`. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays on the desk and in after-call work after refresh.
@@ -83,17 +83,20 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | Method | Path | Result |
 | --- | --- | --- |
 | `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
-| `GET` | `/sessions?status=waiting` | `{ sessions }` queue |
+| `GET` | `/sessions?status=waiting` | waiting queue, oldest first |
 | `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, and `captures[]` |
 | `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, `disposition`, and `captureGuide` |
 | `POST` | `/sessions/:id/captures` | store one JPEG or PNG still |
 | `GET` | `/sessions/:id/captures/:captureId` | still bytes (`image/jpeg` or `image/png`) |
-| `POST` | `/sessions/:id/accept` | `{ sessionId, roomName, agentToken, status: "in_call" }` |
-| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide }` |
+| `POST` | `/sessions/claim` | oldest waiting session → in call |
+| `POST` | `/sessions/:id/accept` | that waiting session → in call |
+| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide, queuePosition }` |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api" }` |
 
-`agentToken` and `customerToken` are LiveKit JWTs when the API key and secret are set, and `lk-stub-…` strings otherwise. A second accept returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` and is not checked.
+`agentToken` and `customerToken` are LiveKit JWTs when the API key and secret are set, and `lk-stub-…` strings otherwise. A second accept of the same session returns `409`. `POST /sessions/claim` on an empty queue returns `409`. Ending is idempotent. `X-Demo-Agent` is stored as `createdBy` on create and as `claimedBy` on claim or accept. It is not checked.
+
+`POST /sessions` always returns `status: "waiting"`. It does not start the call. `queuePosition` is the 1-based place among waiting sessions and is `null` once the session is in call or ended. `GET /sessions?status=waiting` is oldest-first. Claim and accept each move exactly one waiting session to `in_call`.
 
 ```bash
 curl -s -X POST http://127.0.0.1:3001/sessions \
@@ -111,8 +114,8 @@ sequenceDiagram
   API-->>Agent: id, joinUrl, status=waiting
   Customer->>API: GET /join/:token
   API-->>Customer: status=waiting, customerToken
-  Agent->>API: POST /sessions/:id/accept
-  API-->>Agent: roomName, agentToken
+  Agent->>API: POST /sessions/claim
+  API-->>Agent: roomName, agentToken, status=in_call
   Customer->>API: GET /join/:token
   API-->>Customer: status=in_call
   Note over Agent,Customer: Both Room.connect to vkyc-sessionId when LiveKit env is set
@@ -138,7 +141,7 @@ Those elements stay hidden until `data-active="true"` is set after a video track
 
 ```
 apps/api                 Express session store, REST, LiveKit token mint
-apps/agent-dashboard     Vite + React desk (create, queue, accept, checklist, stills, ACW, end)
+apps/agent-dashboard     Vite + React desk (waiting queue, claim, checklist, stills, ACW, end)
 apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ```
 
@@ -230,6 +233,25 @@ curl -s -X PATCH "http://127.0.0.1:3001/sessions/$ID" \
   -d '{"captureGuide":"id"}'
 ```
 
+## Waiting queue
+
+A session is waiting from the moment it is created. The customer webview home can enter the queue itself (`POST /sessions`, then `/join/<token>`), and the desk **Create session** button does the same thing. Neither path opens the call. The join link is unchanged.
+
+The desk polls `GET /sessions` about every 2 seconds and lists only `waiting` sessions, oldest first. **Claim next** calls `POST /sessions/claim`. **Claim** on a row calls `POST /sessions/:id/accept`. Both reuse the existing LiveKit join and the in-call desk (payload, checklist, Capture still, end, ACW, disposition). The desk claims one session at a time. While that call is open, further claim buttons stay disabled, and every other waiting session remains in the list. Ending the call sets `ended`. Disposition is still after-call work on that same session.
+
+```bash
+# Two customers waiting. Claim the oldest. The second stays queued.
+curl -s -X POST http://127.0.0.1:3001/sessions \
+  -H 'content-type: application/json' -d '{"fullName":"Ayu"}'
+curl -s -X POST http://127.0.0.1:3001/sessions \
+  -H 'content-type: application/json' -d '{"fullName":"Budi"}'
+curl -s http://127.0.0.1:3001/sessions?status=waiting
+curl -s -X POST http://127.0.0.1:3001/sessions/claim -H 'x-demo-agent: Desk 1'
+curl -s http://127.0.0.1:3001/sessions?status=waiting
+```
+
+Claim and accept return `{ sessionId, roomName, agentToken, joinUrl, status: "in_call", claimedBy }`. There is no forecasting, shrinkage, skills routing, or assignment of one session to more than one agent.
+
 ## Out of scope
 
-OCR, liveness models, IDV, AML, SSO, recording, queue and workforce management, CRM, and production hardening. Escalate and PSU are not dispositions in this wave.
+OCR, liveness models, IDV, AML, SSO, recording, CRM, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions.

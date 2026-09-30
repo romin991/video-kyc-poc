@@ -42,13 +42,17 @@ export interface Session {
   disposition: Disposition | null;
   captureGuide: CaptureKind | null;
   captures: CaptureSummary[];
+  claimedBy: string | null;
+  queuePosition: number | null;
 }
 
 export interface AcceptResult {
   sessionId: string;
   roomName: string;
   agentToken: string;
+  joinUrl: string;
   status: "in_call";
+  claimedBy: string | null;
 }
 
 export interface EndResult {
@@ -128,6 +132,10 @@ export function patchSession(id: string, agentName: string, patch: SessionPatch)
 
 export function acceptSession(id: string, agentName: string): Promise<AcceptResult> {
   return request(`/sessions/${id}/accept`, agentName, { method: "POST" });
+}
+
+export function claimNextSession(agentName: string): Promise<AcceptResult> {
+  return request("/sessions/claim", agentName, { method: "POST" });
 }
 
 export function endSession(id: string, agentName: string): Promise<EndResult> {

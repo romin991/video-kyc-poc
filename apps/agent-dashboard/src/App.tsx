@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type Ref } from "react";
 import {
   acceptSession,
+  claimNextSession,
   createSession,
   endSession,
   getHealth,
   listSessions,
   patchSession,
+  type AcceptResult,
   type CaptureKind,
   type Disposition,
   type Session,
@@ -143,9 +145,11 @@ export function App() {
   const media = useLiveKit(call?.roomName ?? null, call?.agentToken ?? null);
   const spotlight = sessions.find((session) => session.id === spotlightId) ?? null;
   const focusSession = sessions.find((session) => session.id === focusId) ?? null;
-  const openSessions = sessions.filter((session) => session.status !== "ended");
+  const waitingSessions = sessions
+    .filter((session) => session.status === "waiting")
+    .sort((a, b) => (a.queuePosition ?? Number.MAX_SAFE_INTEGER) - (b.queuePosition ?? Number.MAX_SAFE_INTEGER));
+  const otherCalls = sessions.filter((session) => session.status === "in_call" && session.id !== call?.sessionId);
   const endedSessions = sessions.filter((session) => session.status === "ended").slice(0, 6);
-  const waitingCount = openSessions.filter((session) => session.status === "waiting").length;
 
   function enqueue<T>(work: () => Promise<T>): Promise<T> {
     const run = tail.current.then(work, work);
@@ -297,6 +301,52 @@ export function App() {
     }
   }
 
+  async function enterClaimedCall(result: AcceptResult, fallbackJoinUrl?: string): Promise<void> {
+    const joinUrl = result.joinUrl || fallbackJoinUrl;
+    if (!joinUrl) throw new Error("Claimed session is missing a join link.");
+    const next: ActiveCall = {
+      sessionId: result.sessionId,
+      roomName: result.roomName,
+      agentToken: result.agentToken,
+      joinUrl,
+    };
+    setCall(next);
+    writeStorage(CALL_KEY, JSON.stringify(next));
+    setSpotlightId(result.sessionId);
+    writeStorage(SPOTLIGHT_KEY, result.sessionId);
+    setAcwId(null);
+    writeStorage(ACW_KEY, null);
+    setSessions((current) =>
+      current.map((item) =>
+        item.id === result.sessionId
+          ? { ...item, status: "in_call", queuePosition: null, claimedBy: result.claimedBy }
+          : item,
+      ),
+    );
+    try {
+      const body = await listSessions(nameRef.current);
+      setSessions(body.sessions);
+    } catch {
+      /* The optimistic in-call row stands until the next poll. */
+    }
+  }
+
+  async function onClaimNext() {
+    setBusy("claim");
+    setError(null);
+    setNotice(null);
+    try {
+      await mutate(async () => {
+        const result = await claimNextSession(nameRef.current);
+        await enterClaimedCall(result);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not claim the next session.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onAccept(session: Session) {
     setBusy(session.id);
     setError(null);
@@ -304,24 +354,10 @@ export function App() {
     try {
       await mutate(async () => {
         const result = await acceptSession(session.id, nameRef.current);
-        const next: ActiveCall = {
-          sessionId: result.sessionId,
-          roomName: result.roomName,
-          agentToken: result.agentToken,
-          joinUrl: session.joinUrl,
-        };
-        setCall(next);
-        writeStorage(CALL_KEY, JSON.stringify(next));
-        setSpotlightId(session.id);
-        writeStorage(SPOTLIGHT_KEY, session.id);
-        setAcwId(null);
-        writeStorage(ACW_KEY, null);
-        setSessions((current) =>
-          current.map((item) => (item.id === session.id ? { ...item, status: "in_call" } : item)),
-        );
+        await enterClaimedCall(result, session.joinUrl);
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not accept the session.");
+      setError(err instanceof Error ? err.message : "Could not claim the session.");
     } finally {
       setBusy(null);
     }
@@ -547,7 +583,10 @@ export function App() {
           <div className="panel-head">
             <div>
               <h2>In call{focusSession ? ` · ${focusSession.onboardingPayload.fullName}` : ""}</h2>
-              <p className="mono">{call.roomName}</p>
+              <p className="mono">
+                {call.roomName}
+                {focusSession?.claimedBy ? ` · claimed by ${focusSession.claimedBy}` : ""}
+              </p>
             </div>
             <button
               type="button"
@@ -607,59 +646,36 @@ export function App() {
       ) : null}
 
       <div className="desk">
-        <section className="panel" aria-labelledby="new-session-heading">
-          <div className="panel-head">
-            <h2 id="new-session-heading">New session</h2>
-            <button
-              type="button"
-              className="primary"
-              disabled={busy !== null || call !== null}
-              onClick={() => void onCreate()}
-            >
-              {busy === "create" ? "Creating…" : "Create session"}
-            </button>
-          </div>
-          {call ? <p className="muted">End the current call before creating another session.</p> : null}
-          {spotlight ? (
-            <div className="spotlight">
-              <div className="spotlight-row">
-                <StatusPill status={spotlight.status} />
-                <span className="mono">{shortId(spotlight.id)}</span>
-                <span className="muted">{spotlight.createdBy}</span>
-              </div>
-              <OnboardingFacts payload={spotlight.onboardingPayload} />
-              <label className="link-field">
-                <span>Customer join link</span>
-                <input
-                  readOnly
-                  value={spotlight.joinUrl}
-                  spellCheck={false}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-              </label>
-              <button type="button" className="ghost" onClick={() => void copyLink(spotlight.joinUrl)}>
-                {copied === spotlight.joinUrl ? "Copied" : "Copy link"}
-              </button>
-            </div>
-          ) : (
-            <p className="muted">Create a session, then open the join link in a second browser window.</p>
-          )}
-        </section>
-
         <section className="panel" aria-labelledby="queue-heading">
           <div className="panel-head">
-            <h2 id="queue-heading">Queue</h2>
-            <span className="count">{waitingCount} waiting</span>
+            <h2 id="queue-heading">Waiting queue</h2>
+            <div className="queue-actions">
+              <span className="count">{waitingSessions.length} waiting</span>
+              <button
+                type="button"
+                className="primary"
+                disabled={call !== null || busy !== null || waitingSessions.length === 0}
+                onClick={() => void onClaimNext()}
+              >
+                {busy === "claim" ? "Claiming…" : "Claim next"}
+              </button>
+            </div>
           </div>
-          {openSessions.length === 0 ? (
-            <p className="muted">No open sessions. New ones show up here within a couple of seconds.</p>
+          <p className="muted queue-note">
+            New sessions wait here. Claim takes one into the call. Everyone else stays in the queue.
+          </p>
+          {waitingSessions.length === 0 ? (
+            <p className="muted">No one is waiting. A new session shows up here within a couple of seconds.</p>
           ) : (
-            <ul className="queue">
-              {openSessions.map((session) => (
+            <ul className="queue" data-queue="waiting">
+              {waitingSessions.map((session) => (
                 <li key={session.id} className="queue-item">
                   <div className="queue-id">
-                    <StatusPill status={session.status} />
-                    <strong>{session.onboardingPayload.fullName}</strong>
+                    <div className="queue-lead">
+                      <span className="queue-pos">#{session.queuePosition ?? "–"}</span>
+                      <StatusPill status={session.status} />
+                      <strong>{session.onboardingPayload.fullName}</strong>
+                    </div>
                     <span className="muted">
                       {shortId(session.id)} · {session.createdBy} · {formatWhen(session.createdAt)}
                     </span>
@@ -668,34 +684,45 @@ export function App() {
                     <button type="button" className="ghost" onClick={() => void copyLink(session.joinUrl)}>
                       {copied === session.joinUrl ? "Copied" : "Copy link"}
                     </button>
-                    {session.status === "waiting" ? (
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={call !== null || busy !== null}
-                        onClick={() => void onAccept(session)}
-                      >
-                        {busy === session.id ? "Accepting…" : "Accept"}
-                      </button>
-                    ) : null}
-                    {session.status === "in_call" && call?.sessionId === session.id ? (
-                      <span className="muted">On this desk</span>
-                    ) : null}
-                    {session.status === "in_call" && call?.sessionId !== session.id ? (
-                      <button
-                        type="button"
-                        className="danger"
-                        disabled={busy !== null}
-                        onClick={() => void onEnd(session.id)}
-                      >
-                        {busy === session.id ? "Ending…" : "End"}
-                      </button>
-                    ) : null}
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={call !== null || busy !== null}
+                      onClick={() => void onAccept(session)}
+                    >
+                      {busy === session.id ? "Claiming…" : "Claim"}
+                    </button>
                   </div>
                 </li>
               ))}
             </ul>
           )}
+          {otherCalls.length > 0 ? (
+            <div className="ended-list">
+              <h3>In call elsewhere</h3>
+              <ul className="queue">
+                {otherCalls.map((session) => (
+                  <li key={session.id} className="queue-item">
+                    <div className="queue-id">
+                      <StatusPill status={session.status} />
+                      <strong>{session.onboardingPayload.fullName}</strong>
+                      <span className="muted">
+                        {session.claimedBy ? `claimed by ${session.claimedBy}` : shortId(session.id)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={busy !== null}
+                      onClick={() => void onEnd(session.id)}
+                    >
+                      {busy === session.id ? "Ending…" : "End"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {endedSessions.length > 0 ? (
             <div className="ended-list">
               <h3>After-call</h3>
@@ -724,6 +751,42 @@ export function App() {
               </ul>
             </div>
           ) : null}
+        </section>
+
+        <section className="panel" aria-labelledby="new-session-heading">
+          <div className="panel-head">
+            <h2 id="new-session-heading">New session</h2>
+            <button type="button" className="primary" disabled={busy !== null} onClick={() => void onCreate()}>
+              {busy === "create" ? "Creating…" : "Create session"}
+            </button>
+          </div>
+          <p className="muted queue-note">
+            Creating a session adds it to the waiting queue. It does not start the call.
+          </p>
+          {spotlight ? (
+            <div className="spotlight">
+              <div className="spotlight-row">
+                <StatusPill status={spotlight.status} />
+                <span className="mono">{shortId(spotlight.id)}</span>
+                <span className="muted">{spotlight.createdBy}</span>
+              </div>
+              <OnboardingFacts payload={spotlight.onboardingPayload} />
+              <label className="link-field">
+                <span>Customer join link</span>
+                <input
+                  readOnly
+                  value={spotlight.joinUrl}
+                  spellCheck={false}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </label>
+              <button type="button" className="ghost" onClick={() => void copyLink(spotlight.joinUrl)}>
+                {copied === spotlight.joinUrl ? "Copied" : "Copy link"}
+              </button>
+            </div>
+          ) : (
+            <p className="muted">Create a session, then open the join link in a second browser window.</p>
+          )}
         </section>
       </div>
     </div>

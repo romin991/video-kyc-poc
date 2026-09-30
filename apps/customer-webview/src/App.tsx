@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { ApiError, fetchJoin, type JoinInfo } from "./api";
+import { ApiError, createCustomerSession, fetchJoin, type JoinInfo } from "./api";
 import { useLiveKit } from "./livekit";
 
 const POLL_MS = 1500;
@@ -16,6 +16,21 @@ function readRoute(): Route {
     return token ? { kind: "join", token } : { kind: "bad" };
   } catch {
     return { kind: "bad" };
+  }
+}
+
+function queuePlace(position: number): string {
+  const mod100 = position % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${position}th`;
+  switch (position % 10) {
+    case 1:
+      return `${position}st`;
+    case 2:
+      return `${position}nd`;
+    case 3:
+      return `${position}rd`;
+    default:
+      return `${position}th`;
   }
 }
 
@@ -145,11 +160,16 @@ function JoinScreen({ token }: { token: string }) {
   }
 
   if (info.status === "waiting") {
+    const place = info.queuePosition && info.queuePosition > 0 ? queuePlace(info.queuePosition) : null;
     return (
       <div className="stack">
         <span className="pulse" aria-hidden="true" />
         <h1>Waiting for an agent</h1>
-        <p>Keep this window open. The call starts when an agent accepts you from the queue.</p>
+        <p>
+          {place
+            ? `You are ${place} in the queue. Keep this window open. The call starts when an agent claims you.`
+            : "Keep this window open. The call starts when an agent claims you from the queue."}
+        </p>
         <p className="mono">Session {info.sessionId.slice(0, 8)}</p>
         {problem ? <p className="problem">{problem} Retrying…</p> : null}
       </div>
@@ -190,19 +210,53 @@ function JoinScreen({ token }: { token: string }) {
   );
 }
 
+function HomeScreen() {
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onEnter() {
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await createCustomerSession(name);
+      window.location.assign(`/join/${encodeURIComponent(session.joinToken)}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not enter the queue.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <h1>Join the queue</h1>
+      <p>Enter your name if you want the agent to see it. You will wait until an agent claims the session.</p>
+      <label className="name-field">
+        <span>Your name</span>
+        <input
+          value={name}
+          maxLength={120}
+          spellCheck={false}
+          placeholder="Optional"
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <button type="button" className="primary" disabled={busy} onClick={() => void onEnter()}>
+        {busy ? "Joining…" : "Enter the queue"}
+      </button>
+      {error ? <p className="problem">{error}</p> : null}
+      <p>Or open the join link the desk copied. It looks like this:</p>
+      <p className="mono example">/join/…</p>
+    </div>
+  );
+}
+
 export function App() {
   const route = readRoute();
 
   return (
     <Shell>
-      {route.kind === "home" ? (
-        <div className="stack">
-          <h1>Open your join link</h1>
-          <p>The agent desk creates a one-time link. It looks like this:</p>
-          <p className="mono example">/join/…</p>
-          <p>Paste that full link into this browser. This screen is the customer webview.</p>
-        </div>
-      ) : null}
+      {route.kind === "home" ? <HomeScreen /> : null}
       {route.kind === "bad" ? (
         <div className="stack">
           <h1>This is not a join link</h1>
