@@ -55,6 +55,8 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
     assert.equal(created.body?.acwNotes, "");
     assert.equal(created.body?.disposition, null);
     assert.equal(created.body?.captureGuide, null);
+    assert.equal(created.body?.claimedBy, null);
+    assert.equal(created.body?.queuePosition, 1);
     assert.deepEqual(created.body?.captures, []);
     const checklist = created.body?.checklist as Array<{ checked: boolean }>;
     assert.equal(checklist.length, 3);
@@ -79,12 +81,14 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
     assert.equal(waitingJoin.body?.status, "waiting");
     assert.equal(waitingJoin.body?.roomName, roomName);
     assert.equal(waitingJoin.body?.captureGuide, null);
+    assert.equal(waitingJoin.body?.queuePosition, 1);
     assert.match(String(waitingJoin.body?.customerToken), /^lk-stub-customer-/);
 
     const accepted = await api(base, `/sessions/${id}/accept`, { method: "POST" });
     assert.equal(accepted.status, 200);
     assert.equal(accepted.body?.status, "in_call");
     assert.equal(accepted.body?.roomName, roomName);
+    assert.equal(accepted.body?.claimedBy, "Demo agent");
     assert.equal(accepted.body?.agentToken, `lk-stub-agent-${roomName}`);
 
     const conflict = await api(base, `/sessions/${id}/accept`, { method: "POST" });
@@ -92,6 +96,7 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
 
     const liveJoin = await api(base, `/join/${joinToken}`);
     assert.equal(liveJoin.body?.status, "in_call");
+    assert.equal(liveJoin.body?.queuePosition, null);
     assert.equal(liveJoin.body?.customerToken, `lk-stub-customer-${roomName}`);
 
     const ended = await api(base, `/sessions/${id}/end`, { method: "POST" });

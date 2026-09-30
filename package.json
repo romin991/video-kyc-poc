@@ -2,7 +2,7 @@
   "name": "video-kyc-poc",
   "private": true,
   "version": "0.1.0",
-  "description": "Superbank Video KYC proof of concept — session shell plus Wave 1 desk",
+  "description": "Superbank Video KYC proof of concept — session shell, Wave 1 desk, and a waiting queue",
   "packageManager": "pnpm@10.33.3",
   "engines": {
     "node": ">=20"

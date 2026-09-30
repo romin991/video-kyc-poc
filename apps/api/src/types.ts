@@ -40,8 +40,12 @@ export interface Session {
   roomName: string;
   createdAt: string;
   createdBy: string;
+  /** Store-only FIFO tie-break. Not part of the HTTP session body. */
+  arrival: number;
   acceptedAt?: string;
   endedAt?: string;
+  /** Demo agent name that claimed this session. Null until claim or accept. */
+  claimedBy: string | null;
   onboardingPayload: OnboardingPayload;
   checklist: ChecklistItem[];
   acwNotes: string;
@@ -68,4 +72,7 @@ export interface SessionResponse {
   disposition: Disposition | null;
   captureGuide: CaptureKind | null;
   captures: CaptureSummary[];
+  claimedBy: string | null;
+  /** 1-based place among waiting sessions. Null once the session is in call or ended. */
+  queuePosition: number | null;
 }

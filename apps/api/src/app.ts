@@ -64,7 +64,12 @@ function toCapture(req: Request, sessionId: string, capture: CaptureRecord) {
   };
 }
 
-function toResponse(req: Request, session: Session, origin: string): SessionResponse {
+function toResponse(
+  req: Request,
+  session: Session,
+  origin: string,
+  queuePosition: number | null,
+): SessionResponse {
   return {
     id: session.id,
     joinUrl: joinUrlFor(origin, session.joinToken),
@@ -79,11 +84,24 @@ function toResponse(req: Request, session: Session, origin: string): SessionResp
     disposition: session.disposition,
     captureGuide: session.captureGuide,
     captures: session.captures.map((capture) => toCapture(req, session.id, capture)),
+    claimedBy: session.claimedBy,
+    queuePosition,
   };
 }
 
 function sendError(res: Response, status: number, error: string, message: string): void {
   res.status(status).json({ error, message });
+}
+
+async function claimedCall(session: Session, origin: string) {
+  return {
+    sessionId: session.id,
+    roomName: session.roomName,
+    agentToken: await participantToken("agent", session.roomName),
+    joinUrl: joinUrlFor(origin, session.joinToken),
+    status: "in_call" as const,
+    claimedBy: session.claimedBy,
+  };
 }
 
 function isCapturePost(req: Request): boolean {
@@ -120,9 +138,16 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   PATCH /sessions/:id            -> checklist, acwNotes, disposition, captureGuide
  *   POST /sessions/:id/captures    -> multipart field `image`, or JSON { image: data URL | base64 }
  *   GET  /sessions/:id/captures/:captureId -> JPEG or PNG bytes
- *   POST /sessions/:id/accept      -> { roomName, agentToken, status: "in_call" }
+ *   POST /sessions/claim           -> oldest waiting session, status "in_call"
+ *   POST /sessions/:id/accept      -> that waiting session, status "in_call"
  *   POST /sessions/:id/end         -> { status: "ended" }
- *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide }
+ *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide, queuePosition }
+ *
+ * Creating a session always leaves it waiting. Claim and accept are the only
+ * ways into in_call, and each one takes a single waiting session. GET
+ * /sessions?status=waiting is oldest-first. queuePosition is 1-based while
+ * waiting and null after that. claimedBy is the X-Demo-Agent value from the
+ * claim or accept.
  *
  * Participant tokens are LiveKit JWTs when LIVEKIT_API_KEY and
  * LIVEKIT_API_SECRET are set. Otherwise they are `lk-stub-…` placeholders
@@ -185,7 +210,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       return;
     }
     const session = store.create(demoAgent(req), onboarding.value);
-    res.status(201).json(toResponse(req, session, origin));
+    res.status(201).json(toResponse(req, session, origin, store.queuePosition(session.id)));
   });
 
   app.get("/sessions", (req, res) => {
@@ -196,7 +221,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     }
     const sessions = store
       .list(status as SessionStatus | undefined)
-      .map((session) => toResponse(req, session, origin));
+      .map((session) => toResponse(req, session, origin, store.queuePosition(session.id)));
     res.json({ sessions });
   });
 
@@ -206,7 +231,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 404, "not_found", "Session not found");
       return;
     }
-    res.json(toResponse(req, session, origin));
+    res.json(toResponse(req, session, origin, store.queuePosition(session.id)));
   });
 
   app.patch("/sessions/:id", (req, res) => {
@@ -232,7 +257,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 400, "bad_request", result.message);
       return;
     }
-    res.json(toResponse(req, result.session, origin));
+    res.json(toResponse(req, result.session, origin, store.queuePosition(result.session.id)));
   });
 
   app.post("/sessions/:id/captures", captureParser, (req, res) => {
@@ -282,8 +307,30 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.send(found.bytes);
   });
 
+  app.post("/sessions/claim", async (req, res) => {
+    const result = store.claimNext(demoAgent(req));
+    if (!result.ok && result.error === "empty") {
+      sendError(res, 409, "conflict", "No session is waiting in the queue");
+      return;
+    }
+    if (!result.ok && result.error === "not_found") {
+      sendError(res, 404, "not_found", "Session not found");
+      return;
+    }
+    if (!result.ok) {
+      sendError(
+        res,
+        409,
+        "conflict",
+        `Session is ${result.session?.status ?? "unavailable"} and cannot be claimed`,
+      );
+      return;
+    }
+    res.json(await claimedCall(result.session, origin));
+  });
+
   app.post("/sessions/:id/accept", async (req, res) => {
-    const result = store.accept(req.params.id);
+    const result = store.accept(req.params.id, demoAgent(req));
     if (!result.ok && result.error === "not_found") {
       sendError(res, 404, "not_found", "Session not found");
       return;
@@ -297,12 +344,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       );
       return;
     }
-    res.json({
-      sessionId: result.session.id,
-      roomName: result.session.roomName,
-      agentToken: await participantToken("agent", result.session.roomName),
-      status: "in_call" as const,
-    });
+    res.json(await claimedCall(result.session, origin));
   });
 
   app.post("/sessions/:id/end", (req, res) => {
@@ -326,6 +368,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       customerToken: await participantToken("customer", session.roomName),
       status: session.status,
       captureGuide: session.captureGuide,
+      queuePosition: store.queuePosition(session.id),
     });
   });
 

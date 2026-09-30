@@ -15,6 +15,7 @@ export class SessionStore {
   private readonly sessions = new Map<string, Session>();
   private readonly byToken = new Map<string, string>();
   private readonly blobs = new Map<string, Buffer>();
+  private arrival = 0;
 
   create(createdBy: string, onboarding: OnboardingPayload, now = new Date()): Session {
     const id = newSessionId();
@@ -26,12 +27,14 @@ export class SessionStore {
       roomName: roomNameFor(id),
       createdAt: now.toISOString(),
       createdBy,
+      arrival: ++this.arrival,
       onboardingPayload: { ...onboarding },
       checklist: DEFAULT_CHECKLIST.map((item) => ({ ...item })),
       acwNotes: "",
       disposition: null,
       captureGuide: null,
       captures: [],
+      claimedBy: null,
     };
     this.sessions.set(id, session);
     this.byToken.set(joinToken, id);
@@ -41,7 +44,14 @@ export class SessionStore {
   list(status?: SessionStatus): Session[] {
     const all = [...this.sessions.values()];
     const filtered = status ? all.filter((session) => session.status === status) : all;
-    return filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (status === "waiting") return filtered.sort(byArrival);
+    return filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  }
+
+  /** 1-based FIFO place. Null when the session is not waiting. */
+  queuePosition(id: string): number | null {
+    const index = this.list("waiting").findIndex((session) => session.id === id);
+    return index === -1 ? null : index + 1;
   }
 
   get(id: string): Session | undefined {
@@ -55,6 +65,7 @@ export class SessionStore {
 
   accept(
     id: string,
+    claimedBy: string,
     now = new Date(),
   ):
     | { ok: true; session: Session }
@@ -64,7 +75,24 @@ export class SessionStore {
     if (session.status !== "waiting") return { ok: false, error: "conflict", session };
     session.status = "in_call";
     session.acceptedAt = now.toISOString();
+    session.claimedBy = claimedBy;
     return { ok: true, session };
+  }
+
+  /**
+   * Claim the oldest waiting session. One claim moves one session to in_call.
+   * Everyone else stays waiting.
+   */
+  claimNext(
+    claimedBy: string,
+    now = new Date(),
+  ):
+    | { ok: true; session: Session }
+    | { ok: false; error: "empty" }
+    | { ok: false; error: "not_found" | "conflict"; session?: Session } {
+    const next = this.list("waiting")[0];
+    if (!next) return { ok: false, error: "empty" };
+    return this.accept(next.id, claimedBy, now);
   }
 
   end(id: string, now = new Date()): { ok: true; session: Session } | { ok: false; error: "not_found" } {
@@ -162,4 +190,10 @@ export class SessionStore {
     if (!bytes) return undefined;
     return { capture, bytes };
   }
+}
+
+function byArrival(a: Session, b: Session): number {
+  const created = a.createdAt.localeCompare(b.createdAt);
+  if (created !== 0) return created;
+  return a.arrival - b.arrival;
 }
