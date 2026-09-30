@@ -1,0 +1,22 @@
+{
+  "name": "video-kyc-poc",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Superbank Video KYC proof of concept — P0 session shell",
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @vkyc/api --filter @vkyc/agent-dashboard --filter @vkyc/customer-webview dev",
+    "dev:api": "pnpm --filter @vkyc/api dev",
+    "dev:agent": "pnpm --filter @vkyc/agent-dashboard dev",
+    "dev:customer": "pnpm --filter @vkyc/customer-webview dev",
+    "build": "pnpm --filter @vkyc/agent-dashboard --filter @vkyc/customer-webview build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @vkyc/api test"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
