@@ -147,6 +147,10 @@ export function App() {
   const mutationEpoch = useRef(0);
   const inflight = useRef(0);
   const tail = useRef<Promise<void>>(Promise.resolve());
+  const notesTimer = useRef(0);
+  const copyTimer = useRef(0);
+  const queueGen = useRef(0);
+  const queueTimer = useRef(0);
   nameRef.current = name.trim() || "Demo agent";
 
   const focusId = call?.sessionId ?? acwId;
@@ -183,6 +187,74 @@ export function App() {
     setSessions((current) => current.map((item) => (item.id === updated.id ? updated : item)));
   }
 
+  function clearNotesTimer() {
+    window.clearTimeout(notesTimer.current);
+    notesTimer.current = 0;
+  }
+
+  function clearCopyTimer() {
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = 0;
+  }
+
+  function clearCallTimers() {
+    clearNotesTimer();
+    clearCopyTimer();
+    setCopied(null);
+  }
+
+  function stopQueuePoll() {
+    queueGen.current += 1;
+    window.clearTimeout(queueTimer.current);
+    queueTimer.current = 0;
+  }
+
+  /** Drop any in-flight queue poll and leave a single chain running. */
+  function startQueuePoll() {
+    stopQueuePoll();
+    const gen = queueGen.current;
+    const loop = async () => {
+      if (queueGen.current !== gen) return;
+      if (inflight.current > 0) {
+        queueTimer.current = window.setTimeout(() => void loop(), POLL_MS);
+        return;
+      }
+      const epochAtStart = mutationEpoch.current;
+      const health = await getHealth();
+      if (queueGen.current !== gen) return;
+      setApiUp(health);
+      if (!health) {
+        setLoaded(true);
+        setLoadError("API is not responding on port 3001.");
+      } else {
+        try {
+          const body = await listSessions(nameRef.current);
+          if (queueGen.current !== gen) return;
+          if (inflight.current === 0 && epochAtStart === mutationEpoch.current) {
+            setSessions(body.sessions);
+            setLoadError(null);
+          }
+        } catch (err) {
+          if (queueGen.current !== gen) return;
+          setLoadError(err instanceof Error ? err.message : "Could not load the queue.");
+        } finally {
+          if (queueGen.current === gen) setLoaded(true);
+        }
+      }
+      if (queueGen.current === gen) {
+        queueTimer.current = window.setTimeout(() => void loop(), POLL_MS);
+      }
+    };
+    void loop();
+  }
+
+  function resetFinishedCallDraft() {
+    guideIntent.current = null;
+    savedNotes.current = "";
+    setNotesDraft("");
+    setNotesSessionId(null);
+  }
+
   useEffect(() => {
     writeStorage(NAME_KEY, nameRef.current);
   }, [name]);
@@ -199,7 +271,8 @@ export function App() {
     if (notesDraft === savedNotes.current) return;
     const sessionId = focusId;
     const value = notesDraft;
-    const handle = window.setTimeout(() => {
+    clearNotesTimer();
+    notesTimer.current = window.setTimeout(() => {
       if (value === savedNotes.current) return;
       void mutate(async () => {
         if (value === savedNotes.current) return;
@@ -210,48 +283,19 @@ export function App() {
         setError(err instanceof Error ? err.message : "Could not save notes.");
       });
     }, 450);
-    return () => window.clearTimeout(handle);
+    return () => clearNotesTimer();
   }, [notesDraft, focusId, notesSessionId]);
 
+  // One queue poll for the life of the desk. End, leaving ACW, and disposition
+  // cancel that chain and start a single new one so a stale response cannot
+  // land on the next call. Unmount stops it. Room and recorder release follow
+  // the call id clearing in the media hooks.
   useEffect(() => {
-    let cancelled = false;
-    let timer = 0;
-
-    const loop = async () => {
-      if (cancelled) return;
-      if (inflight.current > 0) {
-        timer = window.setTimeout(loop, POLL_MS);
-        return;
-      }
-      const epochAtStart = mutationEpoch.current;
-      const health = await getHealth();
-      if (cancelled) return;
-      setApiUp(health);
-      if (!health) {
-        setLoaded(true);
-        setLoadError("API is not responding on port 3001.");
-      } else {
-        try {
-          const body = await listSessions(nameRef.current);
-          if (cancelled) return;
-          if (inflight.current === 0 && epochAtStart === mutationEpoch.current) {
-            setSessions(body.sessions);
-            setLoadError(null);
-          }
-        } catch (err) {
-          if (cancelled) return;
-          setLoadError(err instanceof Error ? err.message : "Could not load the queue.");
-        } finally {
-          if (!cancelled) setLoaded(true);
-        }
-      }
-      if (!cancelled) timer = window.setTimeout(loop, POLL_MS);
-    };
-
-    void loop();
+    startQueuePoll();
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+      stopQueuePoll();
+      clearNotesTimer();
+      clearCopyTimer();
     };
   }, []);
 
@@ -260,8 +304,14 @@ export function App() {
     const match = sessions.find((session) => session.id === call.sessionId);
     if (!match || match.status === "ended") {
       const sessionId = call.sessionId;
+      void flushNotes().catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not save notes.");
+      });
+      clearCallTimers();
+      guideIntent.current = null;
       setCall(null);
       writeStorage(CALL_KEY, null);
+      startQueuePoll();
       if (match?.status === "ended") {
         setAcwId(sessionId);
         writeStorage(ACW_KEY, sessionId);
@@ -277,15 +327,23 @@ export function App() {
   }
 
   function closeAcw() {
+    void flushNotes().catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Could not save notes.");
+    });
+    clearCallTimers();
+    resetFinishedCallDraft();
     setAcwId(null);
     writeStorage(ACW_KEY, null);
+    setNotice(null);
+    startQueuePoll();
   }
 
   async function copyLink(url: string) {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(url);
-      window.setTimeout(() => {
+      clearCopyTimer();
+      copyTimer.current = window.setTimeout(() => {
         setCopied((current) => (current === url ? null : current));
       }, 2000);
     } catch {
@@ -314,6 +372,9 @@ export function App() {
   async function enterClaimedCall(result: AcceptResult, fallbackJoinUrl?: string): Promise<void> {
     const joinUrl = result.joinUrl || fallbackJoinUrl;
     if (!joinUrl) throw new Error("Claimed session is missing a join link.");
+    clearCallTimers();
+    resetFinishedCallDraft();
+    startQueuePoll();
     const next: ActiveCall = {
       sessionId: result.sessionId,
       roomName: result.roomName,
@@ -346,6 +407,11 @@ export function App() {
     setError(null);
     setNotice(null);
     try {
+      await flushNotes();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save notes.");
+    }
+    try {
       await mutate(async () => {
         const result = await claimNextSession(nameRef.current);
         await enterClaimedCall(result);
@@ -361,6 +427,11 @@ export function App() {
     setBusy(session.id);
     setError(null);
     setNotice(null);
+    try {
+      await flushNotes();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save notes.");
+    }
     try {
       await mutate(async () => {
         const result = await acceptSession(session.id, nameRef.current);
@@ -388,11 +459,14 @@ export function App() {
   async function onEnd(sessionId: string) {
     setBusy(sessionId);
     setError(null);
+    const endingOurs = call?.sessionId === sessionId;
     try {
       await flushNotes();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save notes.");
     }
+    clearCallTimers();
+    if (endingOurs) guideIntent.current = null;
     try {
       await recording.stopAndUpload(sessionId);
     } catch (err) {
@@ -416,6 +490,7 @@ export function App() {
       setError(err instanceof Error ? err.message : "Could not end the session.");
     } finally {
       setBusy(null);
+      startQueuePoll();
     }
   }
 
@@ -517,6 +592,9 @@ export function App() {
         const updated = await patchSession(sessionId, nameRef.current, { disposition: value });
         replaceSession(updated);
       });
+      clearCopyTimer();
+      setCopied(null);
+      startQueuePoll();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the disposition.");
     }

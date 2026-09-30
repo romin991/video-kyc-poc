@@ -98,31 +98,41 @@ function JoinScreen({ token }: { token: string }) {
   const remoteRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let generation = 0;
     let timer = 0;
 
+    const stop = () => {
+      generation += 1;
+      window.clearTimeout(timer);
+      timer = 0;
+    };
+
     const loop = async () => {
+      const ticket = generation;
       try {
         const next = await fetchJoin(token);
-        if (cancelled) return;
+        if (ticket !== generation) return;
         setInfo(next);
         setProblem(null);
-        if (next.status === "ended") return;
+        if (next.status === "ended") {
+          stop();
+          return;
+        }
       } catch (err) {
-        if (cancelled) return;
+        if (ticket !== generation) return;
         if (err instanceof ApiError && err.status === 404) {
+          stop();
           setFatal(err.message);
           return;
         }
         setProblem(err instanceof Error ? err.message : "Could not reach the verification service.");
       }
-      if (!cancelled) timer = window.setTimeout(loop, POLL_MS);
+      if (ticket === generation) timer = window.setTimeout(() => void loop(), POLL_MS);
     };
 
     void loop();
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+      stop();
     };
   }, [token]);
 
