@@ -56,6 +56,10 @@ export interface Session {
    */
   captureGuide: CaptureKind | null;
   captures: CaptureRecord[];
+  /** LiveKit egress artifact. Webrtc attaches this; the API does not start egress. */
+  recordingUrl: string | null;
+  recordingId: string | null;
+  recordingAttachedAt: string | null;
 }
 
 export interface SessionResponse {
@@ -75,4 +79,7 @@ export interface SessionResponse {
   claimedBy: string | null;
   /** 1-based place among waiting sessions. Null once the session is in call or ended. */
   queuePosition: number | null;
+  recordingUrl: string | null;
+  recordingId: string | null;
+  recordingAttachedAt: string | null;
 }

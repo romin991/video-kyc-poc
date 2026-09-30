@@ -16,6 +16,19 @@ function kindLabel(kind: CaptureKind): string {
   return KINDS.find((item) => item.value === kind)?.label ?? kind;
 }
 
+function playbackKind(url: string): "video" | "audio" | null {
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const ext = pathname.slice(pathname.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "mp4" || ext === "webm" || ext === "mov" || ext === "m4v" || ext === "ogv") return "video";
+  if (ext === "mp3" || ext === "wav" || ext === "ogg" || ext === "m4a") return "audio";
+  return null;
+}
+
 export function OnboardingFacts({ payload }: { payload: OnboardingPayload }) {
   const rows: [string, string][] = [
     ["Name", payload.fullName],
@@ -43,6 +56,8 @@ export function KycWorkspace({
   captures,
   notes,
   disposition,
+  recordingUrl,
+  recordingId,
   kind,
   busy,
   capturePending,
@@ -60,6 +75,8 @@ export function KycWorkspace({
   captures: CaptureSummary[];
   notes: string;
   disposition: Disposition | null;
+  recordingUrl: string | null;
+  recordingId: string | null;
   kind: CaptureKind;
   busy: boolean;
   capturePending: boolean;
@@ -72,6 +89,7 @@ export function KycWorkspace({
   onDisposition: (value: Disposition) => void;
 }) {
   const needsStill = captures.length === 0;
+  const playback = recordingUrl ? playbackKind(recordingUrl) : null;
 
   return (
     <div className="kyc-stack" data-kyc={phase === "acw" ? "acw" : "desk"}>
@@ -165,6 +183,42 @@ export function KycWorkspace({
           )}
         </section>
       </div>
+
+      {phase === "acw" ? (
+        <section className="panel" aria-labelledby="kyc-recording-heading" data-kyc="recording">
+          <div className="panel-head">
+            <h2 id="kyc-recording-heading">Call recording</h2>
+          </div>
+          {recordingUrl ? (
+            <div className="recording">
+              <a
+                href={recordingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-kyc="recording-link"
+              >
+                Play or download recording
+              </a>
+              {playback === "video" ? (
+                <video controls playsInline src={recordingUrl} data-kyc="recording-player" />
+              ) : null}
+              {playback === "audio" ? <audio controls src={recordingUrl} data-kyc="recording-player" /> : null}
+              <p className="mono recording-url">{recordingUrl}</p>
+              {recordingId ? (
+                <p className="muted" data-kyc="recording-id">
+                  Recording id {recordingId}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="muted" data-kyc="recording-empty">
+              {recordingId
+                ? `Recording id ${recordingId}. No playback URL yet.`
+                : "No recording attached yet. LiveKit egress can attach a URL after the call."}
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <section className="panel" aria-labelledby="kyc-notes-heading">
         <div className="panel-head">

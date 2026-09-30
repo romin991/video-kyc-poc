@@ -44,6 +44,9 @@ export interface Session {
   captures: CaptureSummary[];
   claimedBy: string | null;
   queuePosition: number | null;
+  recordingUrl: string | null;
+  recordingId: string | null;
+  recordingAttachedAt: string | null;
 }
 
 export interface AcceptResult {

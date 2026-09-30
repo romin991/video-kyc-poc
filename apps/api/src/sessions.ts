@@ -35,6 +35,9 @@ export class SessionStore {
       captureGuide: null,
       captures: [],
       claimedBy: null,
+      recordingUrl: null,
+      recordingId: null,
+      recordingAttachedAt: null,
     };
     this.sessions.set(id, session);
     this.byToken.set(joinToken, id);
@@ -149,6 +152,23 @@ export class SessionStore {
     if (patch.acwNotes !== undefined) session.acwNotes = patch.acwNotes;
     if (patch.disposition !== undefined) session.disposition = patch.disposition;
     if (patch.captureGuide !== undefined) session.captureGuide = patch.captureGuide;
+    return { ok: true, session };
+  }
+
+  /**
+   * Attach a recording URL and/or id. Omitted fields stay as they are.
+   * Any session status is valid: egress often finishes as the call ends.
+   */
+  attachRecording(
+    id: string,
+    input: { recordingUrl?: string; recordingId?: string },
+    now = new Date(),
+  ): { ok: true; session: Session } | { ok: false; error: "not_found"; message: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, error: "not_found", message: "Session not found" };
+    if (input.recordingUrl !== undefined) session.recordingUrl = input.recordingUrl;
+    if (input.recordingId !== undefined) session.recordingId = input.recordingId;
+    session.recordingAttachedAt = now.toISOString();
     return { ok: true, session };
   }
 

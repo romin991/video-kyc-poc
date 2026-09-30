@@ -1,6 +1,6 @@
 # Superbank Video KYC POC
 
-Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session.
+Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session. Wave 3 lets LiveKit egress attach a recording URL, shows that link in after-call work, and sends a CRM and datalake stub when a disposition is saved.
 
 When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness models, IDV, AML, SSO, and production hardening are out of scope. The checklist is a manual checkbox, not a model.
 
@@ -33,7 +33,7 @@ pnpm dev
 6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
 7. Set **Kind** to **ID**. Within about 1.5s, Browser B shows the customer camera full-frame with a card outline and the line “align ID inside the box”. **Face** or **Other** removes it. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. It uploads with the kind selected on the desk, including `id`. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays on the desk and in after-call work after refresh.
 8. **Browser A.** Click **End session**.
-9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, and stills.
+9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. **Call recording** shows a play or download link when a recording URL has been attached, or “No recording attached yet” until then. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. That writes a CRM and datalake stub (webhook or log line). Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, stills, and recording link.
 10. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
 
 Run the processes in separate terminals if you want quieter logs:
@@ -84,8 +84,9 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | --- | --- | --- |
 | `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
 | `GET` | `/sessions?status=waiting` | waiting queue, oldest first |
-| `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, and `captures[]` |
+| `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, `captures[]`, and recording fields |
 | `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, `disposition`, and `captureGuide` |
+| `POST` | `/sessions/:id/recording` | attach `recordingUrl` and/or `recordingId` (LiveKit egress) |
 | `POST` | `/sessions/:id/captures` | store one JPEG or PNG still |
 | `GET` | `/sessions/:id/captures/:captureId` | still bytes (`image/jpeg` or `image/png`) |
 | `POST` | `/sessions/claim` | oldest waiting session → in call |
@@ -252,6 +253,120 @@ curl -s http://127.0.0.1:3001/sessions?status=waiting
 
 Claim and accept return `{ sessionId, roomName, agentToken, joinUrl, status: "in_call", claimedBy }`. There is no forecasting, shrinkage, skills routing, or assignment of one session to more than one agent.
 
+## Call recording
+
+This API does not start LiveKit egress. Webrtc owns egress. When the artifact exists, webrtc calls:
+
+`POST /sessions/:id/recording`
+
+```json
+{
+  "recordingUrl": "https://egress.example/vkyc/call.mp4",
+  "recordingId": "EG_room_1"
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `recordingUrl` | one of the two | Absolute `http:` or `https:` URL, 2048 characters max |
+| `recordingId` | one of the two | Egress id, 200 characters max |
+
+Send either field or both. A field you omit stays as it was. An empty string is `400`. `ftp:` and other non-http(s) URLs are `400`. Unknown sessions are `404`. The call can be waiting, in call, or ended. A later POST replaces only the fields it includes and refreshes `recordingAttachedAt`.
+
+`200` is the session, including:
+
+```json
+{
+  "recordingUrl": "https://egress.example/vkyc/call.mp4",
+  "recordingId": "EG_room_1",
+  "recordingAttachedAt": "2026-09-30T10:06:00.000Z"
+}
+```
+
+`GET /sessions/:id` returns the same three fields. A new session has all three as `null`. Ending the call does not clear them.
+
+After-call work reads `recordingUrl`. When it is set, the desk shows **Play or download recording** (new tab) and the URL. A URL whose path ends in `.mp4`, `.webm`, `.mov`, `.m4v`, or `.ogv` also renders a `<video controls>` player. `.mp3`, `.wav`, `.ogg`, and `.m4a` render an audio player. An id with no URL shows the id and no player. There is no retention screen and no SSO.
+
+```bash
+curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/recording" \
+  -H 'content-type: application/json' \
+  -d '{"recordingUrl":"https://egress.example/vkyc/call.mp4","recordingId":"EG_room_1"}'
+```
+
+## Disposition stubs
+
+Saving Approve, Reject, or UTV (`PATCH` with a non-null `disposition`, after the session has ended and a still exists) delivers one stub payload to CRM and one to the datalake. Notes-only patches and clearing disposition to `null` do not. A failed or missing webhook does not roll back the disposition. The desk still gets `200` with the session.
+
+For each sink, the API POSTs JSON to that sink's webhook. If that webhook URL is unset, it appends one JSON line to the log file instead. A webhook that is set but returns a non-2xx, or cannot be reached, is written to the same log with `webhookError` set. Timeout is 8 seconds.
+
+| Env | Default |
+| --- | --- |
+| `CRM_STUB_WEBHOOK_URL` | unset → log |
+| `DATALAKE_STUB_WEBHOOK_URL` | unset → log |
+| `DISPOSITION_STUB_LOG_PATH` | `data/disposition-stubs.jsonl` |
+
+Relative log paths resolve from the repo root, not the API process cwd. `data/` is gitignored.
+
+```json
+{
+  "sink": "crm",
+  "sessionId": "<session id>",
+  "disposition": "approve",
+  "agentId": "Closer",
+  "claimedBy": "Desk 1",
+  "timestamps": {
+    "createdAt": "2026-09-30T10:00:00.000Z",
+    "acceptedAt": "2026-09-30T10:01:00.000Z",
+    "endedAt": "2026-09-30T10:05:00.000Z",
+    "dispositionAt": "2026-09-30T10:06:00.000Z"
+  },
+  "captures": [
+    {
+      "id": "cap_…",
+      "kind": "face",
+      "url": "http://127.0.0.1:3001/sessions/<session id>/captures/cap_…",
+      "contentType": "image/jpeg",
+      "createdAt": "2026-09-30T10:04:00.000Z",
+      "capturedAt": "2026-09-30T10:04:00.000Z"
+    }
+  ],
+  "recording": { "id": "EG_room_1", "url": "https://egress.example/vkyc/call.mp4" }
+}
+```
+
+`agentId` is the `X-Demo-Agent` header on the disposition request (`Demo agent` when the header is blank). `claimedBy` is the agent who claimed or accepted the session, or `null`. `sink` is `crm` or `datalake`. The datalake body is the same shape. This is not a Corex or Onboarding client.
+
+### QA
+
+Recording link, without LiveKit egress:
+
+```bash
+ID=$(curl -s -X POST http://127.0.0.1:3001/sessions -H 'content-type: application/json' -d '{}' | jq -r .id)
+curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/captures" \
+  -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"face"}' >/dev/null
+curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/end" >/dev/null
+curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/recording" \
+  -H 'content-type: application/json' \
+  -d '{"recordingUrl":"https://egress.example/vkyc/call.mp4","recordingId":"EG_room_1"}'
+```
+
+Open the desk, **Open ACW** on that ended session. **Call recording** shows **Play or download recording** and an in-page video player, because the URL ends in `.mp4`.
+
+Disposition stub, webhooks unset:
+
+```bash
+curl -s -X PATCH "http://127.0.0.1:3001/sessions/$ID" \
+  -H 'content-type: application/json' \
+  -H 'x-demo-agent: Closer' \
+  -d '{"disposition":"approve"}'
+tail -n 2 data/disposition-stubs.jsonl
+```
+
+Two lines, `sink` `crm` and `datalake`, with that session id, `disposition` `approve`, `agentId` `Closer`, capture metadata, and timestamps.
+
+Disposition stub, webhooks set: point `CRM_STUB_WEBHOOK_URL` and `DATALAKE_STUB_WEBHOOK_URL` at listeners that return 2xx, restart the API, and repeat the PATCH. Each listener receives one JSON body. The log stays empty for that disposition unless a webhook fails.
+
 ## Out of scope
 
-OCR, liveness models, IDV, AML, SSO, recording, CRM, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions.
+OCR, liveness models, IDV, AML, JumpCloud SSO, starting LiveKit egress, Corex, Onboarding, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. Recording is an attached URL and id only. CRM and the datalake are webhook or log stubs.

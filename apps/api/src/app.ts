@@ -1,9 +1,10 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
-import { decodeImage, parseCaptureMeta, parseOnboarding, parsePatch } from "./kyc.js";
+import { decodeImage, parseCaptureMeta, parseOnboarding, parsePatch, parseRecordingAttach } from "./kyc.js";
 import { SessionStore } from "./sessions.js";
+import { deliverDispositionStubs, resolveStubConfig, type DispositionStubBody, type StubOverrides } from "./stubs.js";
 import { participantToken } from "./tokens.js";
-import type { CaptureRecord, Session, SessionResponse, SessionStatus } from "./types.js";
+import type { CaptureRecord, Disposition, Session, SessionResponse, SessionStatus } from "./types.js";
 
 const STATUSES: readonly SessionStatus[] = ["waiting", "in_call", "ended"];
 
@@ -16,6 +17,11 @@ export interface AppOptions {
   customerAppOrigin?: string;
   corsOrigins?: string[];
   log?: boolean;
+  /**
+   * When set, replaces CRM/datalake env for this process. Unset webhook
+   * fields log instead, even if CRM_STUB_WEBHOOK_URL is present in the environment.
+   */
+  stubs?: StubOverrides;
 }
 
 const DEFAULT_CORS = [
@@ -86,6 +92,39 @@ function toResponse(
     captures: session.captures.map((capture) => toCapture(req, session.id, capture)),
     claimedBy: session.claimedBy,
     queuePosition,
+    recordingUrl: session.recordingUrl,
+    recordingId: session.recordingId,
+    recordingAttachedAt: session.recordingAttachedAt,
+  };
+}
+
+function stubBody(req: Request, session: Session, agentId: string, disposition: Disposition): DispositionStubBody {
+  return {
+    sessionId: session.id,
+    disposition,
+    agentId,
+    claimedBy: session.claimedBy,
+    timestamps: {
+      createdAt: session.createdAt,
+      acceptedAt: session.acceptedAt ?? null,
+      endedAt: session.endedAt ?? null,
+      dispositionAt: new Date().toISOString(),
+    },
+    captures: session.captures.map((capture) => {
+      const summary = toCapture(req, session.id, capture);
+      return {
+        id: summary.id,
+        kind: summary.kind,
+        url: summary.url,
+        contentType: summary.contentType,
+        createdAt: summary.createdAt,
+        capturedAt: summary.capturedAt,
+      };
+    }),
+    recording: {
+      id: session.recordingId,
+      url: session.recordingUrl,
+    },
   };
 }
 
@@ -134,8 +173,9 @@ function isPayloadTooLarge(error: unknown): boolean {
  *
  *   POST /sessions                 -> session, stub onboarding unless the body overrides it
  *   GET  /sessions                 -> { sessions }
- *   GET  /sessions/:id             -> onboardingPayload, checklist, acwNotes, disposition, captures[]
+ *   GET  /sessions/:id             -> checklist, notes, disposition, captures[], recordingUrl, recordingId
  *   PATCH /sessions/:id            -> checklist, acwNotes, disposition, captureGuide
+ *   POST /sessions/:id/recording   -> { recordingUrl?, recordingId? } from LiveKit egress
  *   POST /sessions/:id/captures    -> multipart field `image`, or JSON { image: data URL | base64 }
  *   GET  /sessions/:id/captures/:captureId -> JPEG or PNG bytes
  *   POST /sessions/claim           -> oldest waiting session, status "in_call"
@@ -154,7 +194,13 @@ function isPayloadTooLarge(error: unknown): boolean {
  * and the call shell stays up. See tokens.ts.
  *
  * Disposition (Approve | Reject | UTV) is stored only after the session has
- * ended and at least one still is on the session.
+ * ended and at least one still exists. A saved disposition posts a stub
+ * payload to CRM_STUB_WEBHOOK_URL and DATALAKE_STUB_WEBHOOK_URL, or appends
+ * a JSON line to DISPOSITION_STUB_LOG_PATH when a webhook is unset.
+ *
+ * POST /sessions/:id/recording stores a recording URL and/or id. This API
+ * does not start LiveKit egress. Webrtc calls it when egress has an artifact.
+ * After-call work reads recordingUrl from the session.
  *
  * captureGuide is the desk's current still kind (`face` | `id` | `other` | null).
  * The customer join poll reads it. `id` is the only value that shows the
@@ -163,6 +209,7 @@ function isPayloadTooLarge(error: unknown): boolean {
 export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
   const corsOrigins = options.corsOrigins ?? readList(process.env.CORS_ORIGINS, DEFAULT_CORS);
+  const stubs = resolveStubConfig(process.env, options.stubs);
   const app = express();
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
@@ -234,7 +281,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json(toResponse(req, session, origin, store.queuePosition(session.id)));
   });
 
-  app.patch("/sessions/:id", (req, res) => {
+  app.patch("/sessions/:id", async (req, res) => {
     const patch = parsePatch(req.body ?? {});
     if (!patch.ok) {
       sendError(res, 400, "bad_request", patch.message);
@@ -255,6 +302,24 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     }
     if (!result.ok) {
       sendError(res, 400, "bad_request", result.message);
+      return;
+    }
+    const disposition = patch.value.disposition;
+    if (disposition) {
+      await deliverDispositionStubs(stubBody(req, result.session, demoAgent(req), disposition), stubs);
+    }
+    res.json(toResponse(req, result.session, origin, store.queuePosition(result.session.id)));
+  });
+
+  app.post("/sessions/:id/recording", (req, res) => {
+    const parsed = parseRecordingAttach(req.body ?? {});
+    if (!parsed.ok) {
+      sendError(res, 400, "bad_request", parsed.message);
+      return;
+    }
+    const result = store.attachRecording(req.params.id, parsed.value);
+    if (!result.ok) {
+      sendError(res, 404, "not_found", result.message);
       return;
     }
     res.json(toResponse(req, result.session, origin, store.queuePosition(result.session.id)));

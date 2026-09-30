@@ -517,6 +517,8 @@ export function App() {
         captures={focusSession.captures}
         notes={notesSessionId === focusSession.id ? notesDraft : focusSession.acwNotes}
         disposition={focusSession.disposition}
+        recordingUrl={focusSession.recordingUrl}
+        recordingId={focusSession.recordingId}
         kind={focusSession.captureGuide ?? "face"}
         busy={busy !== null}
         capturePending={captures.pending}

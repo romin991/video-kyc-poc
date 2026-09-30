@@ -31,6 +31,14 @@ export interface SessionPatch {
   captureGuide?: CaptureKind | null;
 }
 
+export interface RecordingAttach {
+  recordingUrl?: string;
+  recordingId?: string;
+}
+
+const RECORDING_URL_MAX = 2048;
+const RECORDING_ID_MAX = 200;
+
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
 function isPlain(value: unknown): value is Record<string, unknown> {
@@ -146,6 +154,55 @@ export function parsePatch(body: unknown): ParseResult<SessionPatch> {
   }
 
   return { ok: true, value: patch };
+}
+
+/**
+ * Body for POST /sessions/:id/recording.
+ * At least one of recordingUrl or recordingId is required.
+ * A field that is omitted is left unchanged. An empty string is rejected.
+ */
+export function parseRecordingAttach(body: unknown): ParseResult<RecordingAttach> {
+  if (!isPlain(body)) return { ok: false, message: "Body must be a JSON object" };
+  const attach: RecordingAttach = {};
+
+  if ("recordingUrl" in body) {
+    if (typeof body.recordingUrl !== "string") return { ok: false, message: "recordingUrl must be a string" };
+    const url = body.recordingUrl.trim();
+    if (!url || url.length > RECORDING_URL_MAX) {
+      return {
+        ok: false,
+        message: url
+          ? `recordingUrl must be ${RECORDING_URL_MAX} characters or fewer`
+          : "recordingUrl must be an http(s) URL",
+      };
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, message: "recordingUrl must be an http(s) URL" };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { ok: false, message: "recordingUrl must be an http(s) URL" };
+    }
+    attach.recordingUrl = url;
+  }
+
+  if ("recordingId" in body) {
+    if (typeof body.recordingId !== "string") return { ok: false, message: "recordingId must be a string" };
+    const id = body.recordingId.trim();
+    if (!id) return { ok: false, message: "recordingId must not be empty" };
+    if (id.length > RECORDING_ID_MAX) {
+      return { ok: false, message: `recordingId must be ${RECORDING_ID_MAX} characters or fewer` };
+    }
+    if (/[\r\n]/.test(id)) return { ok: false, message: "recordingId must not contain line breaks" };
+    attach.recordingId = id;
+  }
+
+  if (!attach.recordingUrl && !attach.recordingId) {
+    return { ok: false, message: "recordingUrl or recordingId is required" };
+  }
+  return { ok: true, value: attach };
 }
 
 /** `id` shows the customer card guide. `face`, `other`, and `null` hide it. */
