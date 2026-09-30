@@ -1,0 +1,287 @@
+:root {
+  color-scheme: dark;
+  --bg: #070908;
+  --device: #121815;
+  --bg-sunken: #0b0e0c;
+  --line: #2c3832;
+  --text: #f3f7f2;
+  --muted: #93a099;
+  --accent: #d6ff4a;
+  --accent-ink: #172000;
+  --good: #b6ff7a;
+  --bad: #ff9b8a;
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  font-family: ui-sans-serif, "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+p,
+h1 {
+  margin: 0;
+}
+
+code,
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.frame {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 12px;
+}
+
+.device {
+  width: min(420px, 100%);
+  min-height: min(780px, calc(100dvh - 48px));
+  background: var(--device);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.device-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 18px 18px 0;
+}
+
+.mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.device-bar strong {
+  display: block;
+  font-weight: 600;
+}
+
+.device-body {
+  flex: 1;
+  padding: 22px 18px 18px;
+  display: flex;
+}
+
+.stack,
+.call {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.stack {
+  justify-content: center;
+}
+
+h1 {
+  font-size: 1.7rem;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+}
+
+.stack p,
+.media-note {
+  color: var(--muted);
+}
+
+.example {
+  color: var(--accent);
+}
+
+.pulse {
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(214, 255, 74, 0.6);
+  animation: pulse 1.8s ease-out infinite;
+}
+
+.call {
+  min-height: 100%;
+}
+
+.call-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.live {
+  color: var(--good);
+  border: 1px solid rgba(182, 255, 122, 0.4);
+  border-radius: 99px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+}
+
+.tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(180deg, rgba(214, 255, 74, 0.06), transparent 42%),
+    var(--bg-sunken);
+}
+
+.tile-remote {
+  min-height: 420px;
+}
+
+.tile-local {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 112px;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.tile video {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tile video[data-active="true"] {
+  display: block;
+}
+
+.tile:has(video[data-active="true"]) .tile-fallback {
+  display: none;
+}
+
+.tile-fallback {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  text-align: center;
+  padding: 12px;
+}
+
+.tile-fallback small {
+  color: var(--muted);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(214, 255, 74, 0.14);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.media-note {
+  display: grid;
+  gap: 8px;
+  font-size: 0.86rem;
+}
+
+.media-note code {
+  word-break: break-all;
+}
+
+.problem {
+  color: var(--bad);
+}
+
+button.ghost {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 10px rgba(214, 255, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(214, 255, 74, 0);
+  }
+}
+
+@media (max-width: 520px) {
+  .frame {
+    padding: 0;
+  }
+
+  .device {
+    width: 100%;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
