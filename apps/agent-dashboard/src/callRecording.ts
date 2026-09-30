@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createCallTape, type CallTape } from "../../api/src/callMediaRelease";
 import { getCallRecording, uploadCallRecording, type CallRecordingMode } from "./api";
-
-export interface CallTape {
-  stop: () => Promise<Blob>;
-}
 
 /**
  * Records the customer tile plus both microphones when Cloud egress cannot
- * start. The original LiveKit tracks are left running.
+ * start. The original LiveKit tracks are left running until the room releases.
  */
 export function startTileRecording(): CallTape | null {
   const remote = document.querySelector<HTMLVideoElement>('[data-livekit="remote"]');
@@ -34,25 +31,14 @@ export function startTileRecording(): CallTape | null {
       if (event.data.size > 0) chunks.push(event.data);
     };
     recorder.start(1000);
-    return {
-      stop: () =>
-        new Promise((resolve, reject) => {
-          recorder.onerror = () => {
-            closeMix();
-            reject(new Error("call recorder failed"));
-          };
-          recorder.onstop = () => {
-            closeMix();
-            resolve(new Blob(chunks, { type: recorder.mimeType || "video/webm" }));
-          };
-          if (recorder.state === "inactive") {
-            closeMix();
-            resolve(new Blob(chunks, { type: "video/webm" }));
-            return;
-          }
-          recorder.stop();
-        }),
-    };
+    return createCallTape({
+      recorder,
+      chunks,
+      close: () => {
+        recorder.ondataavailable = null;
+        closeMix();
+      },
+    });
   } catch (error) {
     closeMix();
     console.error("[vkyc] browser call recorder failed to start", error);
@@ -77,11 +63,28 @@ function mixCallAudio(
     node.connect(destination);
     return node;
   });
-  const stream = new MediaStream([video, ...destination.stream.getAudioTracks()]);
+  const mixedAudio = destination.stream.getAudioTracks();
+  const stream = new MediaStream([video, ...mixedAudio]);
+  let closed = false;
   return {
     stream,
     close: () => {
-      nodes.forEach((node) => node.disconnect());
+      if (closed) return;
+      closed = true;
+      nodes.forEach((node) => {
+        try {
+          node.disconnect();
+        } catch {
+          // The node is already disconnected.
+        }
+      });
+      for (const track of mixedAudio) {
+        try {
+          track.stop();
+        } catch {
+          // The mix track already ended.
+        }
+      }
       void context.close().catch(() => undefined);
     },
   };
@@ -100,10 +103,39 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
 } {
   const [mode, setMode] = useState<CallRecordingMode | "unknown">("unknown");
   const tape = useRef<CallTape | null>(null);
+  const timerRef = useRef(0);
   const sessionRef = useRef(sessionId);
   const agentRef = useRef(agentName);
   sessionRef.current = sessionId;
   agentRef.current = agentName;
+
+  const takeTape = (): CallTape | null => {
+    const current = tape.current;
+    tape.current = null;
+    return current;
+  };
+
+  // Layout so the recorder and its poll stop before useLiveKit's passive
+  // cleanup disconnects the room and stops the camera tracks.
+  useLayoutEffect(() => {
+    const endingSessionId = sessionId;
+    return () => {
+      window.clearInterval(timerRef.current);
+      timerRef.current = 0;
+      const current = takeTape();
+      if (!current) return;
+      void current.stop().then(async (blob) => {
+        if (!endingSessionId || blob.size === 0) return;
+        try {
+          await uploadCallRecording(endingSessionId, agentRef.current, blob);
+        } catch (error) {
+          console.error("[vkyc] call recorder teardown failed", error);
+        }
+      }).catch((error: unknown) => {
+        console.error("[vkyc] call recorder teardown failed", error);
+      });
+    };
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -117,7 +149,12 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
         if (cancelled || sessionRef.current !== sessionId) return;
         setMode(status.mode);
         if (status.mode === "fallback" && mediaConnected && !tape.current) {
-          tape.current = startTileRecording();
+          const started = startTileRecording();
+          if (cancelled || sessionRef.current !== sessionId) {
+            void started?.stop();
+            return;
+          }
+          tape.current = started;
         }
       } catch {
         if (!cancelled) setMode("unknown");
@@ -125,21 +162,21 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
     };
     void tick();
     const timer = window.setInterval(() => void tick(), 1000);
+    timerRef.current = timer;
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      if (timerRef.current === timer) timerRef.current = 0;
     };
   }, [sessionId, mediaConnected]);
 
   async function stopAndUpload(endingSessionId: string): Promise<void> {
     if (sessionRef.current !== endingSessionId) return;
-    const current = tape.current;
-    tape.current = null;
+    const current = takeTape();
     if (!current) return;
-    const id = endingSessionId;
     const blob = await current.stop();
     if (blob.size === 0) return;
-    await uploadCallRecording(id, agentRef.current, blob);
+    await uploadCallRecording(endingSessionId, agentRef.current, blob);
   }
 
   return { mode, stopAndUpload };
