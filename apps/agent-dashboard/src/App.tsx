@@ -130,6 +130,7 @@ export function App() {
   const [notesDraft, setNotesDraft] = useState("");
   const [notesSessionId, setNotesSessionId] = useState<string | null>(null);
   const remoteRef = useRef<HTMLVideoElement>(null);
+  const guideIntent = useRef<CaptureKind | null>(null);
   const nameRef = useRef("Demo agent");
   const savedNotes = useRef("");
   const mutationEpoch = useRef(0);
@@ -392,6 +393,31 @@ export function App() {
     }
   }
 
+  async function onCaptureGuide(kind: CaptureKind) {
+    if (!focusId || !focusSession) return;
+    if (focusSession.captureGuide === kind) return;
+    const sessionId = focusId;
+    const previous = focusSession.captureGuide;
+    guideIntent.current = kind;
+    setError(null);
+    setSessions((current) =>
+      current.map((item) => (item.id === sessionId ? { ...item, captureGuide: kind } : item)),
+    );
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { captureGuide: kind });
+        if (guideIntent.current !== kind) return;
+        replaceSession(updated);
+      });
+    } catch (err) {
+      if (guideIntent.current !== kind) return;
+      setSessions((current) =>
+        current.map((item) => (item.id === sessionId ? { ...item, captureGuide: previous } : item)),
+      );
+      setError(err instanceof Error ? err.message : "Could not update the capture guide.");
+    }
+  }
+
   async function onUpload(file: Blob | File, kind: CaptureKind) {
     if (!focusId) return;
     const sessionId = focusId;
@@ -455,9 +481,11 @@ export function App() {
         captures={focusSession.captures}
         notes={notesSessionId === focusSession.id ? notesDraft : focusSession.acwNotes}
         disposition={focusSession.disposition}
+        kind={focusSession.captureGuide ?? "face"}
         busy={busy !== null}
         capturePending={captures.pending}
         onToggle={(itemId, checked) => void onToggle(itemId, checked)}
+        onKind={(kind) => void onCaptureGuide(kind)}
         onNotes={setNotesDraft}
         onNotesBlur={() => void flushNotes().catch((err: unknown) => {
           setError(err instanceof Error ? err.message : "Could not save notes.");

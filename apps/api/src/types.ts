@@ -46,6 +46,11 @@ export interface Session {
   checklist: ChecklistItem[];
   acwNotes: string;
   disposition: Disposition | null;
+  /**
+   * Kind the desk is capturing right now. `id` turns the customer ID
+   * wireframe on. `face`, `other`, and `null` leave it off.
+   */
+  captureGuide: CaptureKind | null;
   captures: CaptureRecord[];
 }
 
@@ -61,5 +66,6 @@ export interface SessionResponse {
   checklist: ChecklistItem[];
   acwNotes: string;
   disposition: Disposition | null;
+  captureGuide: CaptureKind | null;
   captures: CaptureSummary[];
 }

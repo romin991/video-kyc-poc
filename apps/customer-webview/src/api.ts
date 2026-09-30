@@ -1,10 +1,14 @@
 export type SessionStatus = "waiting" | "in_call" | "ended";
 
+export type CaptureKind = "face" | "id" | "other";
+
 export interface JoinInfo {
   sessionId: string;
   roomName: string;
   customerToken: string;
   status: SessionStatus;
+  /** `id` shows the card wireframe. Any other value hides it. */
+  captureGuide: CaptureKind | null;
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:3001").replace(/\/$/, "");

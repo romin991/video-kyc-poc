@@ -31,7 +31,7 @@ pnpm dev
 4. **Browser A.** The session appears in the queue. Click **Accept**.
 5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
 6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
-7. Add a still. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays after refresh.
+7. Set **Kind** to **ID**. Within about 1.5s, Browser B shows the customer camera full-frame with a card outline and the line “align ID inside the box”. **Face** or **Other** removes it. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. It uploads with the kind selected on the desk, including `id`. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays on the desk and in after-call work after refresh.
 8. **Browser A.** Click **End session**.
 9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, and stills.
 10. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
@@ -85,11 +85,11 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
 | `GET` | `/sessions?status=waiting` | `{ sessions }` queue |
 | `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, and `captures[]` |
-| `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, and `disposition` |
+| `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, `disposition`, and `captureGuide` |
 | `POST` | `/sessions/:id/captures` | store one JPEG or PNG still |
 | `GET` | `/sessions/:id/captures/:captureId` | still bytes (`image/jpeg` or `image/png`) |
 | `POST` | `/sessions/:id/accept` | `{ sessionId, roomName, agentToken, status: "in_call" }` |
-| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status }` |
+| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide }` |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api" }` |
 
@@ -192,7 +192,7 @@ JSON:
 }
 ```
 
-`image` may also be raw base64 without the data-URL prefix. Content type is sniffed from the bytes, not the filename. `201` returns:
+`image` may also be raw base64 without the data-URL prefix. Content type is sniffed from the bytes, not the filename. The upload `kind` is the still's label. It is separate from `captureGuide`, which only controls the customer overlay. `201` returns:
 
 ```json
 {
@@ -212,6 +212,22 @@ JSON:
 curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/captures" \
   -F "kind=face" \
   -F "image=@still.jpg;type=image/jpeg"
+```
+
+### ID capture guide
+
+`captureGuide` on the session is the kind the desk is capturing: `face`, `id`, `other`, or `null`. A new session starts at `null`. The customer does not send it.
+
+The desk **Kind** menu sends `PATCH /sessions/:id` with `{ "captureGuide": "id" }` (or `face` / `other`). `null` clears it. Unknown values return `400` and leave the previous value in place.
+
+`GET /sessions/:id` and the customer poll `GET /join/:token` both return `captureGuide`. While the call is open and the value is `id`, the customer webview fills the stage with their camera, draws a card-aspect wireframe (ISO ID-1, about 85.6 × 54), and shows “align ID inside the box”. The agent tile stays as a small preview. Any other value hides the overlay and restores the usual layout. The next join poll (about 1.5s) picks the change up.
+
+**Capture still** and **Add still** are unchanged. They upload with the kind selected in that menu, including `id`, through `POST /sessions/:id/captures`. The guide does not crop, read, or score the image.
+
+```bash
+curl -s -X PATCH "http://127.0.0.1:3001/sessions/$ID" \
+  -H 'content-type: application/json' \
+  -d '{"captureGuide":"id"}'
 ```
 
 ## Out of scope

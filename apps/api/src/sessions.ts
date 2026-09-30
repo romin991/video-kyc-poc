@@ -30,6 +30,7 @@ export class SessionStore {
       checklist: DEFAULT_CHECKLIST.map((item) => ({ ...item })),
       acwNotes: "",
       disposition: null,
+      captureGuide: null,
       captures: [],
     };
     this.sessions.set(id, session);
@@ -119,6 +120,7 @@ export class SessionStore {
     }
     if (patch.acwNotes !== undefined) session.acwNotes = patch.acwNotes;
     if (patch.disposition !== undefined) session.disposition = patch.disposition;
+    if (patch.captureGuide !== undefined) session.captureGuide = patch.captureGuide;
     return { ok: true, session };
   }
 

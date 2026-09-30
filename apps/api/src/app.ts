@@ -77,6 +77,7 @@ function toResponse(req: Request, session: Session, origin: string): SessionResp
     checklist: session.checklist.map((item) => ({ ...item })),
     acwNotes: session.acwNotes,
     disposition: session.disposition,
+    captureGuide: session.captureGuide,
     captures: session.captures.map((capture) => toCapture(req, session.id, capture)),
   };
 }
@@ -116,12 +117,12 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   POST /sessions                 -> session, stub onboarding unless the body overrides it
  *   GET  /sessions                 -> { sessions }
  *   GET  /sessions/:id             -> onboardingPayload, checklist, acwNotes, disposition, captures[]
- *   PATCH /sessions/:id            -> checklist, acwNotes, disposition
+ *   PATCH /sessions/:id            -> checklist, acwNotes, disposition, captureGuide
  *   POST /sessions/:id/captures    -> multipart field `image`, or JSON { image: data URL | base64 }
  *   GET  /sessions/:id/captures/:captureId -> JPEG or PNG bytes
  *   POST /sessions/:id/accept      -> { roomName, agentToken, status: "in_call" }
  *   POST /sessions/:id/end         -> { status: "ended" }
- *   GET  /join/:token              -> { roomName, customerToken, status }
+ *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide }
  *
  * Participant tokens are LiveKit JWTs when LIVEKIT_API_KEY and
  * LIVEKIT_API_SECRET are set. Otherwise they are `lk-stub-…` placeholders
@@ -129,6 +130,10 @@ function isPayloadTooLarge(error: unknown): boolean {
  *
  * Disposition (Approve | Reject | UTV) is stored only after the session has
  * ended and at least one still is on the session.
+ *
+ * captureGuide is the desk's current still kind (`face` | `id` | `other` | null).
+ * The customer join poll reads it. `id` is the only value that shows the
+ * card wireframe. It does not change how still bytes are stored.
  */
 export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
@@ -320,6 +325,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       roomName: session.roomName,
       customerToken: await participantToken("customer", session.roomName),
       status: session.status,
+      captureGuide: session.captureGuide,
     });
   });
 

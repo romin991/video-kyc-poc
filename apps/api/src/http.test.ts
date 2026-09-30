@@ -54,6 +54,7 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
     assert.equal(onboarding.applicationId, "APP-2026-00421");
     assert.equal(created.body?.acwNotes, "");
     assert.equal(created.body?.disposition, null);
+    assert.equal(created.body?.captureGuide, null);
     assert.deepEqual(created.body?.captures, []);
     const checklist = created.body?.checklist as Array<{ checked: boolean }>;
     assert.equal(checklist.length, 3);
@@ -77,6 +78,7 @@ test("session lifecycle: create, queue, accept, join, end", async () => {
     assert.equal(waitingJoin.status, 200);
     assert.equal(waitingJoin.body?.status, "waiting");
     assert.equal(waitingJoin.body?.roomName, roomName);
+    assert.equal(waitingJoin.body?.captureGuide, null);
     assert.match(String(waitingJoin.body?.customerToken), /^lk-stub-customer-/);
 
     const accepted = await api(base, `/sessions/${id}/accept`, { method: "POST" });
