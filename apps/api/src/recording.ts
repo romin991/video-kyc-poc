@@ -197,6 +197,8 @@ function blank(value: string | undefined): string | undefined {
 function defaultAttachOrigin(env: NodeJS.ProcessEnv = process.env): string {
   const configured = blank(env.RECORDING_ATTACH_ORIGIN);
   if (configured) return configured.replace(/\/$/, "");
+  const vercelHost = blank(env.VERCEL_URL)?.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+  if (vercelHost) return `https://${vercelHost}`;
   const port = blank(env.PORT) ?? "3001";
   return `http://127.0.0.1:${port}`;
 }

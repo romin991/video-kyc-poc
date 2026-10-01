@@ -146,6 +146,7 @@ Those elements stay hidden until `data-active="true"` is set after a video track
 
 ```
 apps/api                 Express session store, REST, LiveKit token mint, call egress
+apps/api/index.ts        Vercel entry: default-exports the Express app
 apps/agent-dashboard     Vite + React desk (waiting queue, claim, checklist, stills, ACW, end)
 apps/customer-webview    Vite + React join page (waiting, in-call, ended)
 ```
@@ -158,7 +159,7 @@ pnpm typecheck  # tsc for all apps
 pnpm build      # production bundles for both UIs
 ```
 
-Optional environment variables are listed in `.env.example`. Defaults match the table above. The API listens on `127.0.0.1` only.
+Optional environment variables are listed in `.env.example`. Defaults match the table above. Off Vercel, the API listens on `127.0.0.1` only. Host wiring for the three existing Vercel projects is in [DEPLOY-VERCEL.md](DEPLOY-VERCEL.md).
 
 ## Wave 1 desk
 
