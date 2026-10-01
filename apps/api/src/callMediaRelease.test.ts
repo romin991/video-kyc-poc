@@ -4,7 +4,9 @@ import {
   clearLiveKitTiles,
   createCallTape,
   createLiveKitReleaseGate,
+  fallbackRecorderAction,
   releaseLiveKitRoom,
+  selectLongerRecording,
   type LiveKitRoomRelease,
   type StoppableTrack,
 } from "./callMediaRelease.js";
@@ -195,6 +197,51 @@ test("stopping the fallback recorder revokes object URLs once", async () => {
   assert.equal(again, blob);
   assert.equal(closes, 1);
   assert.deepEqual(revoked, ["blob:http://127.0.0.1/tape"]);
+});
+
+test("an inactive fallback recorder restarts until end session freezes it", () => {
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: false, recorderState: null }),
+    "start",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: false, recorderState: "recording" }),
+    "keep",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: false, recorderState: "paused" }),
+    "keep",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: false, recorderState: "inactive" }),
+    "restart",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: false, ending: false, recorderState: "inactive" }),
+    "keep",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "egress", mediaConnected: true, ending: false, recorderState: null }),
+    "keep",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: true, recorderState: null }),
+    "keep",
+  );
+  assert.equal(
+    fallbackRecorderAction({ mode: "fallback", mediaConnected: true, ending: true, recorderState: "inactive" }),
+    "keep",
+  );
+});
+
+test("the longer fallback blob is the one that survives a short stub", () => {
+  const stub = { size: 3_000, label: "stub" };
+  const call = { size: 900_000, label: "call" };
+  assert.equal(selectLongerRecording(null, stub), stub);
+  assert.equal(selectLongerRecording(stub, call), call);
+  assert.equal(selectLongerRecording(call, stub), call);
+  assert.equal(selectLongerRecording(call, { size: 0, label: "empty" }), call);
+  assert.equal(selectLongerRecording(null, { size: 0, label: "empty" }), null);
 });
 
 test("an inactive recorder closes without calling stop", async () => {

@@ -340,6 +340,12 @@ class LiveKitCallRecorder implements CallRecorder {
     }
     const recordingId = job.fallbackId ?? `local_${randomBytes(9).toString("base64url")}`;
     job.fallbackId = recordingId;
+    if (job.file && upload.bytes.length < job.file.bytes.length) {
+      console.warn(
+        `[vkyc] kept fallback recording ${recordingId} (${job.file.bytes.length} bytes); ignored a shorter upload (${upload.bytes.length} bytes)`,
+      );
+      return { ok: true, recordingId, recordingUrl: upload.recordingUrl };
+    }
     job.file = { bytes: upload.bytes, contentType: upload.contentType };
     await this.send(sessionId, { recordingId, recordingUrl: upload.recordingUrl });
     return { ok: true, recordingId, recordingUrl: upload.recordingUrl };
