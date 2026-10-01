@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
-import { decodeImage, parseCaptureMeta, parseOnboarding, parsePatch, parseRecordingAttach } from "./kyc.js";
+import { decodeImage, parseCaptureMeta, parseCustomerReply, parseOnboarding, parsePatch, parseRecordingAttach } from "./kyc.js";
 import type { CallRecorder } from "./recording.js";
 import { SessionStore } from "./sessions.js";
 import { deliverDispositionStubs, resolveStubConfig, type DispositionStubBody, type StubOverrides } from "./stubs.js";
@@ -98,6 +98,13 @@ function toResponse(
     acwNotes: session.acwNotes,
     disposition: session.disposition,
     captureGuide: session.captureGuide,
+    maPrompt: session.maPrompt ? { ...session.maPrompt } : null,
+    maAnswers: session.maAnswers.map((item) => ({ ...item })),
+    digitChallenge: session.digitChallenge ? { ...session.digitChallenge } : null,
+    digitResponse: session.digitResponse,
+    digitRespondedAt: session.digitRespondedAt,
+    maMatch: session.maMatch,
+    digitMatch: session.digitMatch,
     captures: session.captures.map((capture) => toCapture(req, session.id, capture)),
     claimedBy: session.claimedBy,
     queuePosition,
@@ -194,7 +201,8 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   POST /sessions                 -> session, stub onboarding unless the body overrides it
  *   GET  /sessions                 -> { sessions }
  *   GET  /sessions/:id             -> checklist, notes, disposition, captures[], recordingUrl, recordingId
- *   PATCH /sessions/:id            -> checklist, acwNotes, disposition, captureGuide
+ *   PATCH /sessions/:id            -> checklist, acwNotes, disposition, captureGuide,
+ *                                  maPrompt, digitChallenge, maMatch, digitMatch
  *   POST /sessions/:id/recording   -> { recordingUrl?, recordingId? } from LiveKit egress
  *   POST /sessions/:id/captures    -> multipart field `image`, or JSON { image: data URL | base64 }
  *   GET  /sessions/:id/captures/:captureId -> JPEG or PNG bytes
@@ -204,7 +212,8 @@ function isPayloadTooLarge(error: unknown): boolean {
  *   GET  /sessions/:id/call-recording -> { mode, recordingId }
  *   POST /sessions/:id/call-recording -> fallback webm/mp4 when Cloud egress is unavailable
  *   GET  /sessions/:id/call-recording/file.webm|mp4 -> fallback recording bytes
- *   GET  /join/:token              -> { roomName, customerToken, status, captureGuide, queuePosition }
+ *   GET  /join/:token              -> status, captureGuide, queuePosition, maPrompt, digitChallenge
+ *   POST /join/:token/replies      -> { answer? } and/or { digitResponse? } while in_call
  *
  * Call recording starts a LiveKit room-composite egress when the in-call room
  * exists, and stops it when the session ends. The egress id and file URL are
@@ -229,9 +238,13 @@ function isPayloadTooLarge(error: unknown): boolean {
  * POST /sessions/:id/recording stores a recording URL and/or id. Egress calls
  * it when an artifact exists. After-call work reads recordingUrl.
  *
- * captureGuide is the desk's current still kind (`face` | `id` | `other` | null).
+ * captureGuide is the desk's current still kind (`face` | `id` | `selfie_ktp` | `other` | null).
  * The customer join poll reads it. `id` is the only value that shows the
- * card wireframe. It does not change how still bytes are stored.
+ * card wireframe. `doc` is stored as `other`. It does not change how still bytes are stored.
+ *
+ * maPrompt and digitChallenge are the questions on the customer screen.
+ * The customer posts replies to POST /join/:token/replies. Answers land on
+ * maAnswers and digitResponse. maMatch and digitMatch are agent stub toggles.
  */
 export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
@@ -527,6 +540,39 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       status: session.status,
       captureGuide: session.captureGuide,
       queuePosition: store.queuePosition(session.id),
+      maPrompt: session.maPrompt ? { ...session.maPrompt } : null,
+      digitChallenge: session.digitChallenge ? { ...session.digitChallenge } : null,
+    });
+  });
+
+  app.post("/join/:token/replies", (req, res) => {
+    const session = store.getByToken(req.params.token);
+    if (!session) {
+      sendError(res, 404, "not_found", "Join link not found");
+      return;
+    }
+    const parsed = parseCustomerReply(req.body ?? {});
+    if (!parsed.ok) {
+      sendError(res, 400, "bad_request", parsed.message);
+      return;
+    }
+    const result = store.recordReply(session.id, parsed.value);
+    if (!result.ok && result.error === "not_found") {
+      sendError(res, 404, "not_found", result.message);
+      return;
+    }
+    if (!result.ok && result.error === "conflict") {
+      sendError(res, 409, "conflict", result.message);
+      return;
+    }
+    if (!result.ok) {
+      sendError(res, 400, "bad_request", result.message);
+      return;
+    }
+    res.json({
+      ok: true,
+      maPrompt: result.session.maPrompt ? { ...result.session.maPrompt } : null,
+      digitChallenge: result.session.digitChallenge ? { ...result.session.digitChallenge } : null,
     });
   });
 
