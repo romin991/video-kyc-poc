@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { ApiError, createCustomerSession, fetchJoin, type JoinInfo } from "./api";
+import { ApiError, createCustomerSession, fetchJoin, postJoinReply, type JoinInfo } from "./api";
 import { useLiveKit } from "./livekit";
 
 const POLL_MS = 1500;
@@ -95,6 +95,13 @@ function JoinScreen({ token }: { token: string }) {
   const [info, setInfo] = useState<JoinInfo | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
+  const [maDraft, setMaDraft] = useState("");
+  const [digitDraft, setDigitDraft] = useState("");
+  const [sending, setSending] = useState<"ma" | "digit" | null>(null);
+  const [replyNote, setReplyNote] = useState<string | null>(null);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [hideMaSentAt, setHideMaSentAt] = useState<string | null>(null);
+  const [hideDigitSentAt, setHideDigitSentAt] = useState<string | null>(null);
   const remoteRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -113,6 +120,8 @@ function JoinScreen({ token }: { token: string }) {
         const next = await fetchJoin(token);
         if (ticket !== generation) return;
         setInfo(next);
+        setHideMaSentAt((hidden) => (next.maPrompt?.sentAt === hidden ? hidden : null));
+        setHideDigitSentAt((hidden) => (next.digitChallenge?.sentAt === hidden ? hidden : null));
         setProblem(null);
         if (next.status === "ended") {
           stop();
@@ -135,6 +144,14 @@ function JoinScreen({ token }: { token: string }) {
       stop();
     };
   }, [token]);
+
+  const maPrompt = info?.maPrompt && info.maPrompt.sentAt !== hideMaSentAt ? info.maPrompt : null;
+  const digitChallenge =
+    info?.digitChallenge && info.digitChallenge.sentAt !== hideDigitSentAt ? info.digitChallenge : null;
+
+  useEffect(() => {
+    if (maPrompt || digitChallenge) setReplyNote(null);
+  }, [maPrompt, digitChallenge]);
 
   const media = useLiveKit(
     info?.status === "in_call" ? info.roomName : null,
@@ -196,6 +213,96 @@ function JoinScreen({ token }: { token: string }) {
           <h1>Connected</h1>
         </div>
         <span className="live">Live</span>
+      </div>
+      <div className="prompts" aria-live="polite">
+        {maPrompt ? (
+          <form
+            className="prompt-card"
+            data-kyc="ma-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const answer = maDraft.trim();
+              if (!answer) return;
+              const sentAt = maPrompt.sentAt;
+              setSending("ma");
+              setReplyError(null);
+              void postJoinReply(token, { answer })
+                .then(() => {
+                  setMaDraft("");
+                  setHideMaSentAt(sentAt);
+                  setReplyNote("Answer sent.");
+                  setInfo((current) => (current ? { ...current, maPrompt: null } : current));
+                })
+                .catch((err: unknown) => {
+                  setReplyError(err instanceof Error ? err.message : "Could not send the answer.");
+                })
+                .finally(() => setSending((current) => (current === "ma" ? null : current)));
+            }}
+          >
+            <p className="eyebrow">Agent question</p>
+            <p className="prompt-copy">{maPrompt.prompt}</p>
+            <label className="name-field">
+              <span>Your answer</span>
+              <input
+                value={maDraft}
+                maxLength={200}
+                autoComplete="off"
+                data-kyc="ma-answer"
+                onChange={(event) => setMaDraft(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary" disabled={sending !== null || maDraft.trim().length === 0}>
+              {sending === "ma" ? "Sending…" : "Send answer"}
+            </button>
+          </form>
+        ) : null}
+        {digitChallenge ? (
+          <form
+            className="prompt-card"
+            data-kyc="digit-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const digitResponse = digitDraft.trim();
+              if (!digitResponse) return;
+              const sentAt = digitChallenge.sentAt;
+              setSending("digit");
+              setReplyError(null);
+              void postJoinReply(token, { digitResponse })
+                .then(() => {
+                  setDigitDraft("");
+                  setHideDigitSentAt(sentAt);
+                  setReplyNote("Digits sent.");
+                  setInfo((current) => (current ? { ...current, digitChallenge: null } : current));
+                })
+                .catch((err: unknown) => {
+                  setReplyError(err instanceof Error ? err.message : "Could not send the digits.");
+                })
+                .finally(() => setSending((current) => (current === "digit" ? null : current)));
+            }}
+          >
+            <p className="eyebrow">Read these digits</p>
+            <p className="digit-readout" data-kyc="digit-readout">
+              {digitChallenge.digits}
+            </p>
+            <p className="prompt-copy">{digitChallenge.prompt}</p>
+            <label className="name-field">
+              <span>Type the digits</span>
+              <input
+                value={digitDraft}
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={16}
+                data-kyc="digit-answer"
+                onChange={(event) => setDigitDraft(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary" disabled={sending !== null || digitDraft.trim().length === 0}>
+              {sending === "digit" ? "Sending…" : "Send digits"}
+            </button>
+          </form>
+        ) : null}
+        {replyNote && !maPrompt && !digitChallenge ? <p className="sent-note">{replyNote}</p> : null}
+        {replyError ? <p className="problem">{replyError}</p> : null}
       </div>
       <div className={idGuide ? "stage stage-id-guide" : "stage"} data-capture-guide={idGuide ? "id" : "off"}>
         <VideoTile label="Agent" slot="remote" videoRef={remoteRef} />

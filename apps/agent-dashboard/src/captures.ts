@@ -10,7 +10,7 @@ export type CaptureSubmit = (image: Blob | File | string, options?: CaptureUploa
  * (client-side) and pass that Blob, File, or base64/data URL here. This posts
  * to `POST /sessions/:id/captures` and returns the stored capture summary.
  *
- *   multipart: field `image` (file), optional `kind` (face|id|other), optional `capturedAt`
+ *   multipart: field `image` (file), optional `kind` (face|id|selfie_ktp|other), optional `capturedAt`
  *   JSON:      `{ image: "data:image/jpeg;base64,...", kind?, capturedAt? }`
  *
  * Prefer `captureVideoStill` in `./captureStill` for the remote customer

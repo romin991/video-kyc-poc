@@ -2,7 +2,29 @@ export type SessionStatus = "waiting" | "in_call" | "ended";
 
 export type Disposition = "approve" | "reject" | "utv";
 
-export type CaptureKind = "face" | "id" | "other";
+export type CaptureKind = "face" | "id" | "selfie_ktp" | "other";
+
+/** Manual-auth question the agent can put on the customer screen. */
+export type MaField = "full_name" | "dob" | "mothers_maiden_name";
+
+export interface MaPrompt {
+  field: MaField;
+  prompt: string;
+  sentAt: string;
+}
+
+export interface MaAnswer {
+  field: MaField;
+  prompt: string;
+  answer: string;
+  answeredAt: string;
+}
+
+export interface DigitChallenge {
+  digits: string;
+  prompt: string;
+  sentAt: string;
+}
 
 export type ImageContentType = "image/jpeg" | "image/png";
 
@@ -52,9 +74,22 @@ export interface Session {
   disposition: Disposition | null;
   /**
    * Kind the desk is capturing right now. `id` turns the customer ID
-   * wireframe on. `face`, `other`, and `null` leave it off.
+   * wireframe on. `face`, `selfie_ktp`, `other`, and `null` leave it off.
    */
   captureGuide: CaptureKind | null;
+  /** Question currently on the customer screen. Null when nothing is waiting. */
+  maPrompt: MaPrompt | null;
+  /** One customer reply per field, first-asked order. A later reply replaces that field. */
+  maAnswers: MaAnswer[];
+  /** Digit prompt currently on the customer screen. Null when nothing is waiting. */
+  digitChallenge: DigitChallenge | null;
+  /** Latest digits the customer typed. Cleared when a new challenge is sent. */
+  digitResponse: string | null;
+  digitRespondedAt: string | null;
+  /** Stub pass/fail for the manual-auth answers. Not a bureau result. */
+  maMatch: boolean | null;
+  /** Stub pass/fail for the digit prompt. Not a liveness-model result. */
+  digitMatch: boolean | null;
   captures: CaptureRecord[];
   /** LiveKit egress artifact. Webrtc attaches this; the API does not start egress. */
   recordingUrl: string | null;
@@ -75,6 +110,13 @@ export interface SessionResponse {
   acwNotes: string;
   disposition: Disposition | null;
   captureGuide: CaptureKind | null;
+  maPrompt: MaPrompt | null;
+  maAnswers: MaAnswer[];
+  digitChallenge: DigitChallenge | null;
+  digitResponse: string | null;
+  digitRespondedAt: string | null;
+  maMatch: boolean | null;
+  digitMatch: boolean | null;
   captures: CaptureSummary[];
   claimedBy: string | null;
   /** 1-based place among waiting sessions. Null once the session is in call or ended. */

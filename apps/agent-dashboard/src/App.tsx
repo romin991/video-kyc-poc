@@ -10,6 +10,7 @@ import {
   type AcceptResult,
   type CaptureKind,
   type Disposition,
+  type MaField,
   type Session,
   type SessionStatus,
 } from "./api";
@@ -582,6 +583,90 @@ export function App() {
     }
   }
 
+  async function onAskMa(field: MaField) {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { maPrompt: { field } });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send the question.");
+    }
+  }
+
+  async function onClearMa() {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { maPrompt: null });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clear the question.");
+    }
+  }
+
+  async function onAskDigits(digits: string) {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { digitChallenge: { digits } });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send the digits.");
+    }
+  }
+
+  async function onClearDigits() {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { digitChallenge: null });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not clear the digits.");
+    }
+  }
+
+  async function onMaMatch(value: boolean | null) {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { maMatch: value });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the identity match.");
+    }
+  }
+
+  async function onDigitMatch(value: boolean | null) {
+    if (!focusId) return;
+    const sessionId = focusId;
+    setError(null);
+    try {
+      await mutate(async () => {
+        const updated = await patchSession(sessionId, nameRef.current, { digitMatch: value });
+        replaceSession(updated);
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the digit match.");
+    }
+  }
+
   async function onDisposition(value: Disposition) {
     if (!focusId) return;
     const sessionId = focusId;
@@ -624,6 +709,18 @@ export function App() {
         onUpload={(file, kind) => void onUpload(file, kind)}
         onCaptureVideo={phase === "call" ? (kind) => void onCaptureVideo(kind) : undefined}
         onDisposition={(value) => void onDisposition(value)}
+        maPrompt={focusSession.maPrompt}
+        maAnswers={focusSession.maAnswers}
+        digitChallenge={focusSession.digitChallenge}
+        digitResponse={focusSession.digitResponse}
+        maMatch={focusSession.maMatch}
+        digitMatch={focusSession.digitMatch}
+        onAskMa={(field) => void onAskMa(field)}
+        onClearMa={() => void onClearMa()}
+        onAskDigits={(digits) => void onAskDigits(digits)}
+        onClearDigits={() => void onClearDigits()}
+        onMaMatch={(value) => void onMaMatch(value)}
+        onDigitMatch={(value) => void onDigitMatch(value)}
       />
     ) : null;
 

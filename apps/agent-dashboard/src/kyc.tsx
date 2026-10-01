@@ -1,9 +1,28 @@
-import { captureSrc, type CaptureKind, type CaptureSummary, type ChecklistItem, type Disposition, type OnboardingPayload } from "./api";
+import { useState } from "react";
+import {
+  captureSrc,
+  type CaptureKind,
+  type CaptureSummary,
+  type ChecklistItem,
+  type DigitChallenge,
+  type Disposition,
+  type MaAnswer,
+  type MaField,
+  type MaPrompt,
+  type OnboardingPayload,
+} from "./api";
 
 const KINDS: { value: CaptureKind; label: string }[] = [
   { value: "face", label: "Face" },
   { value: "id", label: "ID" },
-  { value: "other", label: "Other" },
+  { value: "selfie_ktp", label: "Selfie + KTP" },
+  { value: "other", label: "Extra doc" },
+];
+
+const MA_FIELDS: { field: MaField; label: string; ask: string }[] = [
+  { field: "full_name", label: "Full name", ask: "Ask full name" },
+  { field: "dob", label: "Date of birth", ask: "Ask date of birth" },
+  { field: "mothers_maiden_name", label: "Mother's maiden name", ask: "Ask mother's maiden name" },
 ];
 
 const DISPOSITIONS: { value: Disposition; label: string }[] = [
@@ -14,6 +33,89 @@ const DISPOSITIONS: { value: Disposition; label: string }[] = [
 
 function kindLabel(kind: CaptureKind): string {
   return KINDS.find((item) => item.value === kind)?.label ?? kind;
+}
+
+function fieldLabel(field: MaField): string {
+  return MA_FIELDS.find((item) => item.field === field)?.label ?? field;
+}
+
+function MatchToggle({
+  label,
+  value,
+  busy,
+  testId,
+  onChange,
+}: {
+  label: string;
+  value: boolean | null;
+  busy: boolean;
+  testId: string;
+  onChange: (value: boolean | null) => void;
+}) {
+  return (
+    <div className="disposition" role="group" aria-label={label} data-kyc={testId}>
+      <button
+        type="button"
+        className="choice"
+        aria-pressed={value === true}
+        disabled={busy}
+        onClick={() => onChange(value === true ? null : true)}
+      >
+        Pass
+      </button>
+      <button
+        type="button"
+        className="choice choice-reject"
+        aria-pressed={value === false}
+        disabled={busy}
+        onClick={() => onChange(value === false ? null : false)}
+      >
+        Fail
+      </button>
+    </div>
+  );
+}
+
+function DigitAsk({ busy, onAsk }: { busy: boolean; onAsk: (digits: string) => void }) {
+  const [digits, setDigits] = useState("");
+  const cleaned = digits.replace(/\s+/g, "");
+  const ready = /^\d{4,6}$/.test(cleaned);
+
+  return (
+    <form
+      className="digit-ask"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!ready) return;
+        onAsk(cleaned);
+        setDigits("");
+      }}
+    >
+      <label className="kind-field">
+        <span>Digits</span>
+        <input
+          value={digits}
+          inputMode="numeric"
+          autoComplete="off"
+          maxLength={11}
+          placeholder="4 to 6 digits"
+          data-kyc="digit-input"
+          onChange={(event) => setDigits(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        className="ghost"
+        disabled={busy}
+        onClick={() => setDigits(Array.from({ length: 4 }, () => Math.floor(Math.random() * 10)).join(""))}
+      >
+        Random
+      </button>
+      <button type="submit" className="primary" disabled={busy || !ready}>
+        Ask digits
+      </button>
+    </form>
+  );
 }
 
 function playbackKind(url: string): "video" | "audio" | null {
@@ -68,6 +170,18 @@ export function KycWorkspace({
   onUpload,
   onCaptureVideo,
   onDisposition,
+  maPrompt,
+  maAnswers,
+  digitChallenge,
+  digitResponse,
+  maMatch,
+  digitMatch,
+  onAskMa,
+  onClearMa,
+  onAskDigits,
+  onClearDigits,
+  onMaMatch,
+  onDigitMatch,
 }: {
   phase: "call" | "acw";
   onboarding: OnboardingPayload;
@@ -87,6 +201,18 @@ export function KycWorkspace({
   onUpload: (file: File, kind: CaptureKind) => void;
   onCaptureVideo?: (kind: CaptureKind) => void;
   onDisposition: (value: Disposition) => void;
+  maPrompt: MaPrompt | null;
+  maAnswers: MaAnswer[];
+  digitChallenge: DigitChallenge | null;
+  digitResponse: string | null;
+  maMatch: boolean | null;
+  digitMatch: boolean | null;
+  onAskMa: (field: MaField) => void;
+  onClearMa: () => void;
+  onAskDigits: (digits: string) => void;
+  onClearDigits: () => void;
+  onMaMatch: (value: boolean | null) => void;
+  onDigitMatch: (value: boolean | null) => void;
 }) {
   const needsStill = captures.length === 0;
   const playback = recordingUrl ? playbackKind(recordingUrl) : null;
@@ -167,6 +293,11 @@ export function KycWorkspace({
               ID guide is on. The customer is asked to align ID inside the box.
             </p>
           ) : null}
+          {phase === "call" && kind === "selfie_ktp" ? (
+            <p className="muted" data-kyc="selfie-ktp-kind">
+              Selfie + KTP still. The card outline stays off.
+            </p>
+          ) : null}
           {captures.length === 0 ? (
             <p className="muted">No stills yet. Capture the customer video, or add a JPEG or PNG.</p>
           ) : (
@@ -183,6 +314,96 @@ export function KycWorkspace({
           )}
         </section>
       </div>
+
+      <section className="panel" aria-labelledby="kyc-ma-heading" data-kyc="manual-auth">
+        <div className="panel-head">
+          <h2 id="kyc-ma-heading">Manual authentication</h2>
+        </div>
+        <div className="ma-grid">
+          <div>
+            <h3>Questions</h3>
+            {phase === "call" ? (
+              <div className="ma-actions">
+                {MA_FIELDS.map((item) => (
+                  <button
+                    key={item.field}
+                    type="button"
+                    className="ghost"
+                    data-ma-field={item.field}
+                    disabled={busy}
+                    onClick={() => onAskMa(item.field)}
+                  >
+                    {item.ask}
+                  </button>
+                ))}
+                {maPrompt ? (
+                  <button type="button" className="ghost" disabled={busy} onClick={onClearMa}>
+                    Clear question
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <p className="muted">Questions close when the call ends. Answers stay on this session.</p>
+            )}
+            {maPrompt ? (
+              <p data-kyc="ma-waiting">Waiting for an answer: {maPrompt.prompt}</p>
+            ) : (
+              <p className="muted">No question on the customer screen.</p>
+            )}
+            {maAnswers.length === 0 ? (
+              <p className="muted">No answers yet.</p>
+            ) : (
+              <ul className="ma-log" data-kyc="ma-answers">
+                {maAnswers.map((item) => (
+                  <li key={item.field}>
+                    <span>{fieldLabel(item.field)}</span>
+                    <strong>{item.answer}</strong>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <MatchToggle label="Stub identity match" value={maMatch} busy={busy} testId="ma-match" onChange={onMaMatch} />
+            <p className="muted">Stub only. Pass checks Identity match. Nothing is sent to a bureau.</p>
+          </div>
+          <div>
+            <h3>Digit liveness</h3>
+            {phase === "call" ? (
+              <>
+                <DigitAsk busy={busy} onAsk={onAskDigits} />
+                {digitChallenge ? (
+                  <button type="button" className="ghost" disabled={busy} onClick={onClearDigits}>
+                    Clear digits
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+            {digitChallenge ? (
+              <p data-kyc="digit-waiting">
+                Waiting for digits <span className="digit-readout">{digitChallenge.digits}</span>
+              </p>
+            ) : (
+              <p className="muted">No digit prompt on the customer screen.</p>
+            )}
+            <p data-kyc="digit-response">
+              {digitResponse ? (
+                <>
+                  Customer typed <strong>{digitResponse}</strong>
+                </>
+              ) : (
+                <span className="muted">No digit reply yet.</span>
+              )}
+            </p>
+            <MatchToggle
+              label="Stub digit match"
+              value={digitMatch}
+              busy={busy}
+              testId="digit-match"
+              onChange={onDigitMatch}
+            />
+            <p className="muted">Stub only. A reply checks Liveness digits spoken. Pass does not score a model.</p>
+          </div>
+        </div>
+      </section>
 
       {phase === "acw" ? (
         <section className="panel" aria-labelledby="kyc-recording-heading" data-kyc="recording">

@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/http.test.ts src/queue.test.ts src/tokens.test.ts src/wave1.test.ts src/wave3.test.ts src/recording.test.ts src/callMediaRelease.test.ts"
+    "test": "tsx --test src/http.test.ts src/queue.test.ts src/tokens.test.ts src/wave1.test.ts src/wave3.test.ts src/wave4.test.ts src/recording.test.ts src/callMediaRelease.test.ts"
   },
   "dependencies": {
     "dotenv": "^18.0.4",

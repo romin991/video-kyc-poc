@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { DEFAULT_CHECKLIST } from "./checklist.js";
-import { CAPTURE_MAX_COUNT, type SessionPatch } from "./kyc.js";
+import { captureShowsDocs, DEFAULT_CHECKLIST, setChecklist, tickChecklist } from "./checklist.js";
+import { CAPTURE_MAX_COUNT, digitChallengePrompt, type CustomerReply, type SessionPatch } from "./kyc.js";
 import { newJoinToken, newSessionId, roomNameFor } from "./tokens.js";
 import type {
   CaptureKind,
@@ -33,6 +33,13 @@ export class SessionStore {
       acwNotes: "",
       disposition: null,
       captureGuide: null,
+      maPrompt: null,
+      maAnswers: [],
+      digitChallenge: null,
+      digitResponse: null,
+      digitRespondedAt: null,
+      maMatch: null,
+      digitMatch: null,
       captures: [],
       claimedBy: null,
       recordingUrl: null,
@@ -111,6 +118,7 @@ export class SessionStore {
   update(
     id: string,
     patch: SessionPatch,
+    now = new Date(),
   ):
     | { ok: true; session: Session }
     | { ok: false; error: "not_found" | "bad_request" | "conflict" | "capture_required"; message: string } {
@@ -152,6 +160,86 @@ export class SessionStore {
     if (patch.acwNotes !== undefined) session.acwNotes = patch.acwNotes;
     if (patch.disposition !== undefined) session.disposition = patch.disposition;
     if (patch.captureGuide !== undefined) session.captureGuide = patch.captureGuide;
+    if (patch.maPrompt !== undefined) {
+      session.maPrompt = patch.maPrompt
+        ? { field: patch.maPrompt.field, prompt: patch.maPrompt.prompt, sentAt: now.toISOString() }
+        : null;
+    }
+    if (patch.digitChallenge !== undefined) {
+      if (patch.digitChallenge) {
+        session.digitChallenge = {
+          digits: patch.digitChallenge.digits,
+          prompt: digitChallengePrompt(patch.digitChallenge.digits),
+          sentAt: now.toISOString(),
+        };
+        session.digitResponse = null;
+        session.digitRespondedAt = null;
+      } else {
+        session.digitChallenge = null;
+      }
+    }
+    if (patch.maMatch !== undefined) session.maMatch = patch.maMatch;
+    if (patch.digitMatch !== undefined) session.digitMatch = patch.digitMatch;
+    if (patch.maMatch === true || patch.maMatch === false) {
+      setChecklist(session.checklist, "identity_match", patch.maMatch);
+    }
+    if (patch.digitMatch === true) tickChecklist(session.checklist, "liveness_digits");
+    return { ok: true, session };
+  }
+
+  /**
+   * Store a customer reply against the active prompt.
+   * An answer clears `maPrompt`. A digit reply clears `digitChallenge`
+   * and keeps the text on `digitResponse` for the desk.
+   */
+  recordReply(
+    id: string,
+    input: CustomerReply,
+    now = new Date(),
+  ):
+    | { ok: true; session: Session }
+    | { ok: false; error: "not_found" | "conflict" | "bad_request"; message: string } {
+    const session = this.sessions.get(id);
+    if (!session) return { ok: false, error: "not_found", message: "Session not found" };
+    if (session.status !== "in_call") {
+      return { ok: false, error: "conflict", message: "Replies are accepted while the call is open" };
+    }
+    if (input.answer !== undefined && !session.maPrompt) {
+      return { ok: false, error: "conflict", message: "No manual authentication question is waiting" };
+    }
+    if (input.digitResponse !== undefined && !session.digitChallenge) {
+      return { ok: false, error: "conflict", message: "No digit prompt is waiting" };
+    }
+
+    if (input.answer !== undefined && session.maPrompt) {
+      const next = {
+        field: session.maPrompt.field,
+        prompt: session.maPrompt.prompt,
+        answer: input.answer,
+        answeredAt: now.toISOString(),
+      };
+      const index = session.maAnswers.findIndex((item) => item.field === next.field);
+      if (index === -1) {
+        session.maAnswers.push(next);
+        if (session.maAnswers.length > 20) {
+          session.maAnswers.splice(0, session.maAnswers.length - 20);
+        }
+      } else {
+        session.maAnswers[index] = next;
+        for (let i = session.maAnswers.length - 1; i > index; i -= 1) {
+          if (session.maAnswers[i]?.field === next.field) session.maAnswers.splice(i, 1);
+        }
+      }
+      session.maPrompt = null;
+    }
+
+    if (input.digitResponse !== undefined && session.digitChallenge) {
+      session.digitResponse = input.digitResponse;
+      session.digitRespondedAt = now.toISOString();
+      session.digitChallenge = null;
+      tickChecklist(session.checklist, "liveness_digits");
+    }
+
     return { ok: true, session };
   }
 
@@ -199,6 +287,7 @@ export class SessionStore {
     };
     this.blobs.set(capture.id, input.bytes);
     session.captures.push(capture);
+    if (captureShowsDocs(capture.kind)) tickChecklist(session.checklist, "docs_shown");
     return { ok: true, session, capture };
   }
 
