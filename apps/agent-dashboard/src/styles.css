@@ -213,6 +213,25 @@ h2 {
   margin-bottom: 16px;
 }
 
+/* In a call, the portrait customer stage sits beside the desk (MA, stills, checklist). */
+@media (min-width: 1180px) {
+  .app:has(> .stage-wrap) {
+    width: min(1400px, calc(100% - 32px));
+    display: grid;
+    grid-template-columns: 380px minmax(0, 1fr);
+    column-gap: 16px;
+    align-items: start;
+  }
+
+  .app:has(> .stage-wrap) > :not(.stage-wrap):not(.kyc-stack) {
+    grid-column: 1 / -1;
+  }
+
+  .app:has(> .stage-wrap) > .stage-wrap {
+    margin-bottom: 0;
+  }
+}
+
 .panel-head,
 .queue-item,
 .media-note {
@@ -337,7 +356,10 @@ button.danger {
 
 .stage {
   position: relative;
-  min-height: 380px;
+  /* Phone feeds are portrait. Width is capped so 9/16 stays within ~72vh, and the box stays 9/16 instead of stretching into a landscape stage. */
+  width: min(100%, calc(min(72vh, 640px) * 9 / 16));
+  aspect-ratio: 9 / 16;
+  margin-inline: auto;
   border-radius: 16px;
   overflow: hidden;
   background: var(--bg-sunken);
@@ -354,14 +376,17 @@ button.danger {
 }
 
 .tile-remote {
-  min-height: 380px;
+  position: absolute;
+  inset: 0;
+  min-height: 0;
 }
 
 .tile-local {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
-  width: 148px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1;
+  width: 104px;
   aspect-ratio: 3 / 4;
   border-radius: 14px;
   overflow: hidden;
@@ -376,6 +401,13 @@ button.danger {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Contain inside the 9/16 stage so a phone frame fills it and the lower face is not cropped. */
+.tile-remote video {
+  object-fit: contain;
+  object-position: center center;
+  background: var(--bg-sunken);
 }
 
 .tile video[data-active="true"] {
@@ -705,12 +737,7 @@ button.choice-utv[aria-pressed="true"] {
     width: 100%;
   }
 
-  .tile-remote,
-  .stage {
-    min-height: 280px;
-  }
-
   .tile-local {
-    width: 104px;
+    width: 88px;
   }
 }
