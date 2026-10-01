@@ -1,6 +1,6 @@
 # Superbank Video KYC POC
 
-Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session. Wave 3 lets LiveKit egress attach a recording URL, shows that link in after-call work, and sends a CRM and datalake stub when a disposition is saved.
+Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session. Wave 3 lets LiveKit egress attach a recording URL, shows that link in after-call work, and sends a CRM and datalake stub when a disposition is saved. Wave 4 adds manual-authentication questions (full name, date of birth, mother's maiden name), a digit prompt, and still kinds for face, ID, selfie + KTP, and an extra document. Matching is a pass/fail toggle on the desk. There is no bureau, OCR, or liveness model.
 
 When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness models, IDV, AML, SSO, and production hardening are out of scope. The checklist is a manual checkbox, not a model.
 
@@ -31,7 +31,7 @@ pnpm dev
 4. **Browser A.** The session appears in the waiting queue. Click **Claim**, or **Claim next** for the oldest waiting session. Creating another session while this one is still waiting leaves both in the queue. Claiming one does not remove the other.
 5. Both windows show the in-call shell: a remote tile and a local tile. With LiveKit env set, allow the camera and microphone. With it unset, the tiles stay on the placeholder and no permission prompt is expected.
 6. **Browser A.** The in-call desk shows the stub customer (name, phone, product, application id, reason for VKYC), a checklist, stills, and ACW notes. Toggle a checklist item. It stays checked after refresh.
-7. Set **Kind** to **ID**. Within about 1.5s, Browser B shows the customer camera full-frame with a card outline and the line “align ID inside the box”. **Face** or **Other** removes it. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. It uploads with the kind selected on the desk, including `id`. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays on the desk and in after-call work after refresh.
+7. Set **Kind** to **ID**. Within about 1.5s, Browser B shows the customer camera full-frame with a card outline and the line “align ID inside the box”. **Face**, **Selfie + KTP**, or **Extra doc** removes it. **Capture still** grabs one JPEG from the remote customer LiveKit camera when that track is live, and uses the customer tile when the track is not available. It uploads with the kind selected on the desk. **Add still** uploads a JPEG or PNG file, which is enough when cameras are off. The thumbnail stays on the desk and in after-call work after refresh. On the call, **Ask full name** (or date of birth, or mother's maiden name) puts a question and a reply box on Browser B. The answer shows on the desk within about 2s. **Ask digits** does the same for a 4–6 digit prompt. **Pass** / **Fail** are stub toggles.
 8. **Browser A.** Click **End session**.
 9. Browser A leaves the call stage and opens after-call work for that session. The same stills and notes are there. **Call recording** shows a play or download link when a recording URL has been attached, or “No recording attached yet” until then. Approve, Reject, and UTV stay disabled until at least one still exists. Pick one. That writes a CRM and datalake stub (webhook or log line). Refresh the desk: **Open ACW** on the ended row shows the same disposition, notes, stills, and recording link.
 10. Browser B changes to **Session ended** on its next check (about 1.5s) and stops polling.
@@ -85,13 +85,14 @@ If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return 
 | `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
 | `GET` | `/sessions?status=waiting` | waiting queue, oldest first |
 | `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, `captures[]`, and recording fields |
-| `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, `disposition`, and `captureGuide` |
+| `PATCH` | `/sessions/:id` | update `checklist`, `acwNotes`, `disposition`, `captureGuide`, `maPrompt`, `digitChallenge`, `maMatch`, and `digitMatch` |
 | `POST` | `/sessions/:id/recording` | attach `recordingUrl` and/or `recordingId` (LiveKit egress) |
 | `POST` | `/sessions/:id/captures` | store one JPEG or PNG still |
 | `GET` | `/sessions/:id/captures/:captureId` | still bytes (`image/jpeg` or `image/png`) |
 | `POST` | `/sessions/claim` | oldest waiting session → in call |
 | `POST` | `/sessions/:id/accept` | that waiting session → in call |
-| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide, queuePosition }` |
+| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, captureGuide, queuePosition, maPrompt, digitChallenge }` |
+| `POST` | `/join/:token/replies` | customer `answer` and/or `digitResponse` while the call is open |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/sessions/:id/call-recording` | `{ mode, recordingId }` while egress is starting, recording, or blocked |
 | `POST` | `/sessions/:id/call-recording` | fallback `video` file (`video/webm` or `video/mp4`, 40 MB) when Cloud egress cannot start |
@@ -186,7 +187,7 @@ Multipart (`Content-Type: multipart/form-data`):
 | Field | Required | Notes |
 | --- | --- | --- |
 | `image` | yes | JPEG or PNG file, 4 MB max |
-| `kind` | no | `face`, `id`, or `other`. Default `other` |
+| `kind` | no | `face`, `id`, `selfie_ktp`, or `other`. `doc` is stored as `other`. Default `other` |
 | `capturedAt` | no | ISO-8601. Default is the server time |
 
 JSON:
@@ -223,9 +224,9 @@ curl -s -X POST "http://127.0.0.1:3001/sessions/$ID/captures" \
 
 ### ID capture guide
 
-`captureGuide` on the session is the kind the desk is capturing: `face`, `id`, `other`, or `null`. A new session starts at `null`. The customer does not send it.
+`captureGuide` on the session is the kind the desk is capturing: `face`, `id`, `selfie_ktp`, `other`, or `null`. A new session starts at `null`. The customer does not send it. `doc` and `extra_doc` are stored as `other`. `selfie+ktp` is stored as `selfie_ktp`.
 
-The desk **Kind** menu sends `PATCH /sessions/:id` with `{ "captureGuide": "id" }` (or `face` / `other`). `null` clears it. Unknown values return `400` and leave the previous value in place.
+The desk **Kind** menu sends `PATCH /sessions/:id` with `{ "captureGuide": "id" }` (or `face` / `selfie_ktp` / `other`). `null` clears it. Unknown values return `400` and leave the previous value in place. Only `id` shows the card wireframe.
 
 `GET /sessions/:id` and the customer poll `GET /join/:token` both return `captureGuide`. While the call is open and the value is `id`, the customer webview fills the stage with their camera, draws a card-aspect wireframe (ISO ID-1, about 85.6 × 54), and shows “align ID inside the box”. The agent tile stays as a small preview. Any other value hides the overlay and restores the usual layout. The next join poll (about 1.5s) picks the change up.
 
@@ -383,6 +384,105 @@ Two lines, `sink` `crm` and `datalake`, with that session id, `disposition` `app
 
 Disposition stub, webhooks set: point `CRM_STUB_WEBHOOK_URL` and `DATALAKE_STUB_WEBHOOK_URL` at listeners that return 2xx, restart the API, and repeat the PATCH. Each listener receives one JSON body. The log stays empty for that disposition unless a webhook fails.
 
+## Wave 4 manual authentication
+
+The agent drives the questions. The customer poll (`GET /join/:token`, about every 1.5s) returns the active prompt. The customer posts a reply. The desk poll (`GET /sessions`, about every 2s) shows the log. Pass and fail are booleans on the session. They do not call a bureau, OCR, or liveness engine.
+
+A new session has `maPrompt: null`, `maAnswers: []`, `digitChallenge: null`, `digitResponse: null`, `digitRespondedAt: null`, `maMatch: null`, and `digitMatch: null`.
+
+### Questions
+
+`PATCH /sessions/:id` while the call is open (the API also accepts this before the call; the customer screen shows the prompt only in call):
+
+```json
+{ "maPrompt": { "field": "full_name" } }
+```
+
+`field` is `full_name`, `dob`, or `mothers_maiden_name`. Omit `prompt` and the server uses “Please type your full name.”, “Please type your date of birth.”, or “Please type your mother's maiden name.” A custom `prompt` is optional, 240 characters max. `{ "maPrompt": null }` clears the question and keeps answers already logged.
+
+`GET /join/:token` then includes:
+
+```json
+{
+  "maPrompt": {
+    "field": "full_name",
+    "prompt": "Please type your full name.",
+    "sentAt": "2026-10-01T02:00:00.000Z"
+  }
+}
+```
+
+`POST /join/:token/replies` with `{ "answer": "Ayu Prameswari" }` appends one `maAnswers` entry and clears `maPrompt`. The reply is trimmed, 200 characters max. It is stored only while `status` is `in_call` and a question is waiting. Otherwise the API returns `409`. The desk reads:
+
+```json
+{
+  "maAnswers": [
+    {
+      "field": "full_name",
+      "prompt": "Please type your full name.",
+      "answer": "Ayu Prameswari",
+      "answeredAt": "2026-10-01T02:00:05.000Z"
+    }
+  ]
+}
+```
+
+`{ "maMatch": true }` is pass, `false` is fail, `null` clears the toggle. Pass checks the **Identity match** checklist item. Fail unchecks it. A later notes-only patch does not put the check back.
+
+### Digits
+
+```json
+{ "digitChallenge": { "digits": "4821" } }
+```
+
+`digits` is 4 to 6 numerals. Spaces are stripped. The stored prompt is “Please say these digits, then type them here: 4 8 2 1”. Sending a new challenge clears `digitResponse`. `{ "digitChallenge": null }` clears the prompt and keeps the last reply.
+
+The customer posts `{ "digitResponse": "4821" }` (digits and spaces, 16 characters max). That stores `digitResponse`, sets `digitRespondedAt`, clears `digitChallenge`, and checks **Liveness digits spoken**. `{ "digitMatch": true }` is the stub pass and also checks that item. Fail does not uncheck it.
+
+`answer` and `digitResponse` may be sent in one POST when both prompts are active.
+
+### Stills
+
+| Desk label | Stored `kind` |
+| --- | --- |
+| Face | `face` |
+| ID | `id` |
+| Selfie + KTP | `selfie_ktp` |
+| Extra doc | `other` (`doc` is accepted and stored as `other`) |
+
+**Capture still** and **Add still** use the selected kind. The ID wireframe stays on only while Kind is ID. An `id`, `selfie_ktp`, or `other` still checks **Documents shown**. A face still does not.
+
+Approve, Reject, and UTV are unchanged: the session must have ended, and at least one still must exist.
+
+### QA
+
+```bash
+ID=$(curl -s -X POST http://127.0.0.1:3001/sessions -H 'content-type: application/json' -d '{}' | jq -r .id)
+TOKEN=$(curl -s http://127.0.0.1:3001/sessions/$ID | jq -r .joinToken)
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/accept -H 'x-demo-agent: Desk 1' >/dev/null
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maPrompt":{"field":"full_name"}}'
+curl -s http://127.0.0.1:3001/join/$TOKEN | jq .maPrompt
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"answer":"Ayu Prameswari"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"digitChallenge":{"digits":"4821"}}'
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"digitResponse":"4821"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maMatch":true,"digitMatch":true}'
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/captures -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"selfie_ktp"}' >/dev/null
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/captures -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"doc"}' >/dev/null
+curl -s http://127.0.0.1:3001/sessions/$ID | jq '{maAnswers,digitResponse,maMatch,digitMatch,checklist,captures:[.captures[].kind]}'
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/end >/dev/null
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"disposition":"approve"}' | jq .disposition
+```
+
+On the desk, open the customer join link, claim the session, and repeat the questions from **Manual authentication**. The customer page shows the prompt and a reply field. After **End session**, Approve, Reject, and UTV still save when a still exists.
+
 ## Out of scope
 
-OCR, liveness models, IDV, AML, JumpCloud SSO, Corex, Onboarding, long-term recording retention, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. CRM and the datalake are webhook or log stubs.
+OCR, liveness models, IDV, AML, JumpCloud SSO, Corex, Onboarding, long-term recording retention, and production hardening. Forecasting, shrinkage, and skills-based routing are out of scope. Escalate and PSU are not dispositions. CRM and the datalake are webhook or log stubs. Manual authentication here is the agent prompt, the customer reply, and a pass/fail toggle.

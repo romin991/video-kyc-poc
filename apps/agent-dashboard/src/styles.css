@@ -497,11 +497,50 @@ h3 {
 }
 
 .kind-field select,
+.kind-field input,
 textarea {
   border: 1px solid var(--line);
   background: var(--bg-sunken);
   border-radius: 10px;
   padding: 8px 10px;
+}
+
+.ma-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.ma-actions,
+.digit-ask {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  margin: 8px 0 12px;
+}
+
+.ma-log {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.ma-log li {
+  display: grid;
+  gap: 2px;
+}
+
+.ma-log span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.digit-readout {
+  letter-spacing: 0.18em;
+  font-weight: 700;
 }
 
 textarea {
@@ -646,6 +685,7 @@ button.choice-utv[aria-pressed="true"] {
   .top-meta,
   .desk,
   .kyc-grid,
+  .ma-grid,
   .queue-item,
   .facts div {
     display: grid;

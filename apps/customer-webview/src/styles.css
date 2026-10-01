@@ -103,6 +103,7 @@ code,
   flex: 1;
   padding: 22px 18px 18px;
   display: flex;
+  overflow: auto;
 }
 
 .stack,
@@ -149,6 +150,35 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.prompts {
+  display: grid;
+  gap: 10px;
+}
+
+.prompt-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(214, 255, 74, 0.45);
+  border-radius: 14px;
+  background: rgba(214, 255, 74, 0.06);
+}
+
+.prompt-copy {
+  font-weight: 650;
+}
+
+.digit-readout {
+  margin: 0;
+  font-size: 1.7rem;
+  letter-spacing: 0.28em;
+  font-weight: 750;
+}
+
+.sent-note {
+  color: var(--good);
 }
 
 .live {

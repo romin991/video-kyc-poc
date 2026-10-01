@@ -2,7 +2,28 @@ export type SessionStatus = "waiting" | "in_call" | "ended";
 
 export type Disposition = "approve" | "reject" | "utv";
 
-export type CaptureKind = "face" | "id" | "other";
+export type CaptureKind = "face" | "id" | "selfie_ktp" | "other";
+
+export type MaField = "full_name" | "dob" | "mothers_maiden_name";
+
+export interface MaPrompt {
+  field: MaField;
+  prompt: string;
+  sentAt: string;
+}
+
+export interface MaAnswer {
+  field: MaField;
+  prompt: string;
+  answer: string;
+  answeredAt: string;
+}
+
+export interface DigitChallenge {
+  digits: string;
+  prompt: string;
+  sentAt: string;
+}
 
 export interface OnboardingPayload {
   fullName: string;
@@ -41,6 +62,13 @@ export interface Session {
   acwNotes: string;
   disposition: Disposition | null;
   captureGuide: CaptureKind | null;
+  maPrompt: MaPrompt | null;
+  maAnswers: MaAnswer[];
+  digitChallenge: DigitChallenge | null;
+  digitResponse: string | null;
+  digitRespondedAt: string | null;
+  maMatch: boolean | null;
+  digitMatch: boolean | null;
   captures: CaptureSummary[];
   claimedBy: string | null;
   queuePosition: number | null;
@@ -68,6 +96,10 @@ export interface SessionPatch {
   acwNotes?: string;
   disposition?: Disposition | null;
   captureGuide?: CaptureKind | null;
+  maPrompt?: { field: MaField; prompt?: string } | null;
+  digitChallenge?: { digits: string } | null;
+  maMatch?: boolean | null;
+  digitMatch?: boolean | null;
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:3001").replace(/\/$/, "");
