@@ -75,30 +75,38 @@ function openOwnedStream(remote: HTMLVideoElement): OwnedStream | null {
   const size = frameSize(remote);
   canvas.width = size.width;
   canvas.height = size.height;
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.style.cssText = "position:fixed;left:-10000px;top:0;pointer-events:none";
+  document.body.appendChild(canvas);
   drawTile(context, canvas);
 
   let canvasStream: MediaStream;
   try {
     canvasStream = canvas.captureStream(15);
   } catch (error) {
+    canvas.remove();
     console.error("[vkyc] canvas capture failed", error);
     return null;
   }
   const videoTrack = canvasStream.getVideoTracks()[0];
-  if (!videoTrack) return null;
+  if (!videoTrack) {
+    canvas.remove();
+    return null;
+  }
 
   const mix = openAudioMix();
   const tracks = mix ? [videoTrack, mix.track] : [videoTrack];
-  let frame = 0;
   let closed = false;
 
   const paint = () => {
     if (closed) return;
     drawTile(context, canvas);
     mix?.rebind();
-    frame = window.requestAnimationFrame(paint);
   };
-  frame = window.requestAnimationFrame(paint);
+  // A timer keeps frames moving if the desk tab is in the background, where
+  // requestAnimationFrame is paused and the canvas track would stay muted.
+  const timer = window.setInterval(paint, 66);
+  paint();
 
   return {
     stream: new MediaStream(tracks),
@@ -108,7 +116,8 @@ function openOwnedStream(remote: HTMLVideoElement): OwnedStream | null {
     close: () => {
       if (closed) return;
       closed = true;
-      window.cancelAnimationFrame(frame);
+      window.clearInterval(timer);
+      canvas.remove();
       mix?.close();
       try {
         videoTrack.stop();
@@ -171,12 +180,30 @@ function openAudioMix(): { track: MediaStreamTrack; rebind: () => void; close: (
   try {
     const context = new AudioContext();
     void context.resume().catch(() => undefined);
+    if (context.state === "suspended") {
+      void context.close().catch(() => undefined);
+      console.error("[vkyc] call audio mix is blocked; recording the customer tile only");
+      return null;
+    }
     const destination = context.createMediaStreamDestination();
+    // A silent clock keeps the mix track producing samples. With no source,
+    // MediaRecorder stays "recording" but writes an empty webm.
+    const silence = context.createGain();
+    silence.gain.value = 0;
+    const clock = context.createOscillator();
+    clock.connect(silence);
+    silence.connect(destination);
+    clock.start();
     const connected = new Map<string, MediaStreamAudioSourceNode>();
     let signature = "";
     let closed = false;
     const track = destination.stream.getAudioTracks()[0];
     if (!track) {
+      try {
+        clock.stop();
+      } catch {
+        // The silent clock already stopped.
+      }
       void context.close().catch(() => undefined);
       return null;
     }
@@ -222,6 +249,11 @@ function openAudioMix(): { track: MediaStreamTrack; rebind: () => void; close: (
           }
         }
         connected.clear();
+        try {
+          clock.stop();
+        } catch {
+          // The silent clock already stopped.
+        }
         try {
           track.stop();
         } catch {
