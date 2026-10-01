@@ -129,6 +129,21 @@ test("manual auth prompts, digit replies, and stub match flags", async () => {
     assert.deepEqual(fields, ["full_name", "dob", "mothers_maiden_name"]);
     assert.equal((both.body?.maAnswers as Array<{ answer: string }>)[2]?.answer, "Wijaya");
 
+    const dobAgain = await api(base, `/sessions/${id}`, json("PATCH", { maPrompt: { field: "dob" } }));
+    assert.equal(dobAgain.status, 200);
+    assert.equal((await api(base, `/join/${token}/replies`, json("POST", { answer: "1-1-1" }))).status, 200);
+    const replaced = await api(base, `/sessions/${id}`);
+    const replacedAnswers = replaced.body?.maAnswers as Array<{ field: string; answer: string }>;
+    assert.deepEqual(
+      replacedAnswers.map((item) => item.field),
+      ["full_name", "dob", "mothers_maiden_name"],
+    );
+    assert.equal(replacedAnswers.find((item) => item.field === "dob")?.answer, "1-1-1");
+    assert.equal(replacedAnswers.find((item) => item.field === "full_name")?.answer, "Ayu Prameswari");
+    assert.equal(replacedAnswers.find((item) => item.field === "mothers_maiden_name")?.answer, "Wijaya");
+    const replacedChecks = replaced.body?.checklist as Array<{ id: string; checked: boolean }>;
+    assert.equal(replacedChecks.find((item) => item.id === "identity_match")?.checked, false);
+
     const digits = await api(base, `/sessions/${id}`, json("PATCH", { digitChallenge: { digits: "48 21" } }));
     assert.equal(digits.status, 200);
     const challenge = digits.body?.digitChallenge as { digits?: string; prompt?: string };

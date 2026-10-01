@@ -355,7 +355,7 @@ export function KycWorkspace({
             ) : (
               <ul className="ma-log" data-kyc="ma-answers">
                 {maAnswers.map((item) => (
-                  <li key={`${item.field}-${item.answeredAt}`}>
+                  <li key={item.field}>
                     <span>{fieldLabel(item.field)}</span>
                     <strong>{item.answer}</strong>
                   </li>

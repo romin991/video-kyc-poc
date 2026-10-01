@@ -244,7 +244,8 @@ function isPayloadTooLarge(error: unknown): boolean {
  *
  * maPrompt and digitChallenge are the questions on the customer screen.
  * The customer posts replies to POST /join/:token/replies. Answers land on
- * maAnswers and digitResponse. maMatch and digitMatch are agent stub toggles.
+ * maAnswers (one row per field; a new reply replaces that field) and
+ * digitResponse. maMatch and digitMatch are agent stub toggles.
  */
 export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";

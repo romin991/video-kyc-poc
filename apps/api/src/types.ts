@@ -79,7 +79,7 @@ export interface Session {
   captureGuide: CaptureKind | null;
   /** Question currently on the customer screen. Null when nothing is waiting. */
   maPrompt: MaPrompt | null;
-  /** Customer replies, oldest first. The desk reads this log. */
+  /** One customer reply per field, first-asked order. A later reply replaces that field. */
   maAnswers: MaAnswer[];
   /** Digit prompt currently on the customer screen. Null when nothing is waiting. */
   digitChallenge: DigitChallenge | null;

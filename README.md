@@ -412,7 +412,7 @@ A new session has `maPrompt: null`, `maAnswers: []`, `digitChallenge: null`, `di
 }
 ```
 
-`POST /join/:token/replies` with `{ "answer": "Ayu Prameswari" }` appends one `maAnswers` entry and clears `maPrompt`. The reply is trimmed, 200 characters max. It is stored only while `status` is `in_call` and a question is waiting. Otherwise the API returns `409`. The desk reads:
+`POST /join/:token/replies` with `{ "answer": "Ayu Prameswari" }` stores one `maAnswers` entry for that field and clears `maPrompt`. Asking the same field again replaces that entry. The reply is trimmed, 200 characters max. It is stored only while `status` is `in_call` and a question is waiting. Otherwise the API returns `409`. The desk reads:
 
 ```json
 {

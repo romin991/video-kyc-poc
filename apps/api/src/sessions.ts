@@ -212,14 +212,23 @@ export class SessionStore {
     }
 
     if (input.answer !== undefined && session.maPrompt) {
-      session.maAnswers.push({
+      const next = {
         field: session.maPrompt.field,
         prompt: session.maPrompt.prompt,
         answer: input.answer,
         answeredAt: now.toISOString(),
-      });
-      if (session.maAnswers.length > 20) {
-        session.maAnswers.splice(0, session.maAnswers.length - 20);
+      };
+      const index = session.maAnswers.findIndex((item) => item.field === next.field);
+      if (index === -1) {
+        session.maAnswers.push(next);
+        if (session.maAnswers.length > 20) {
+          session.maAnswers.splice(0, session.maAnswers.length - 20);
+        }
+      } else {
+        session.maAnswers[index] = next;
+        for (let i = session.maAnswers.length - 1; i > index; i -= 1) {
+          if (session.maAnswers[i]?.field === next.field) session.maAnswers.splice(i, 1);
+        }
       }
       session.maPrompt = null;
     }
