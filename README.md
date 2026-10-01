@@ -270,7 +270,7 @@ When LiveKit URL, API key, and API secret are all set, claim and accept arm a ro
 | `EGRESS_FILEPATH` | Default `recordings/{room_name}-{time}.mp4`. |
 | `EGRESS_PUBLIC_BASE_URL` | HTTPS origin used when egress reports `s3://bucket/key` instead of an HTTPS location. |
 
-If Cloud egress cannot start, the desk records the customer tile and both microphones and uploads that file on **End session**. The bytes stay in API memory at `GET /sessions/:id/call-recording/file.webm` (or `file.mp4`). The same POST uses `recordingId` `local_…` and that URL. Restarting the API drops the file. Without the three LiveKit variables, recording stays off and the call shell is unchanged.
+If Cloud egress cannot start, the desk records the customer tile and both microphones and uploads that file on **End session**. The recording follows the tile for the whole call: if the browser recorder stops while media is still connected, the desk starts it again and keeps the longer take. A later upload that is shorter than the file already stored does not replace it, so End session cannot overwrite the call with a 1–3s stub. The bytes stay in API memory at `GET /sessions/:id/call-recording/file.webm` (or `file.mp4`). The same POST uses `recordingId` `local_…` and that URL. Restarting the API drops the file. Without the three LiveKit variables, recording stays off and the call shell is unchanged.
 
 The stored fields use:
 

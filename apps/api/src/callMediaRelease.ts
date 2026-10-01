@@ -52,6 +52,30 @@ export interface CallTape {
   stop: () => Promise<Blob>;
 }
 
+/**
+ * While Cloud egress is down, the desk keeps one fallback recorder for the
+ * whole call. A stopped recorder must be started again. End session sets
+ * `ending` so the poll does not arm another recorder during upload.
+ */
+export function fallbackRecorderAction(input: {
+  mode: string;
+  mediaConnected: boolean;
+  ending: boolean;
+  recorderState: string | null;
+}): "start" | "restart" | "keep" {
+  if (input.ending || !input.mediaConnected || input.mode !== "fallback") return "keep";
+  if (input.recorderState == null) return "start";
+  if (input.recorderState === "recording" || input.recorderState === "paused") return "keep";
+  return "restart";
+}
+
+/** Keep the larger fallback blob. A later 1–3s stub must not replace the call. */
+export function selectLongerRecording<T extends { readonly size: number }>(current: T | null, next: T | null): T | null {
+  if (!next || next.size <= 0) return current;
+  if (!current || next.size > current.size) return next;
+  return current;
+}
+
 export interface LiveKitReleaseGate {
   /** Resolves when every release scheduled so far has finished. */
   afterReleased: () => Promise<void>;

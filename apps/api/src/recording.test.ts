@@ -200,6 +200,48 @@ test("storage rejection switches to the browser fallback and still patches a fil
   assert.equal(rejected.ok, false);
 });
 
+test("a shorter fallback upload does not replace a longer recording", async () => {
+  const egress = fakeEgress();
+  egress.startError = new Error("no file output configured");
+  const patches: RecordingAttach[] = [];
+  const recorder = createCallRecorder({
+    egress,
+    rooms: { listRooms: async () => [{ name: "vkyc-s" }] },
+    attach: async (_id, body) => {
+      patches.push(body);
+      return { ok: true };
+    },
+    now: () => 0,
+    sleep: async () => undefined,
+    attachAttempts: 1,
+  });
+  recorder.onInCall({ id: "s", roomName: "vkyc-s" });
+  await recorder.idle("s");
+
+  const url = "http://127.0.0.1:3001/sessions/s/call-recording/file.webm";
+  const call = Buffer.alloc(180_000, 1);
+  const stub = Buffer.alloc(4_000, 2);
+  const first = await recorder.saveFallback("s", { bytes: call, contentType: "video/webm", recordingUrl: url });
+  assert.equal(first.ok, true);
+  const second = await recorder.saveFallback("s", { bytes: stub, contentType: "video/webm", recordingUrl: url });
+  assert.equal(second.ok, true);
+  if (first.ok && second.ok) {
+    assert.equal(second.recordingId, first.recordingId);
+    assert.match(first.recordingId, /^local_/);
+  }
+  assert.equal(recorder.fallbackFile("s")?.bytes.length, call.length);
+  assert.equal(recorder.fallbackFile("s")?.bytes[0], 1);
+  assert.equal(patches.length, 1);
+
+  const longer = Buffer.alloc(240_000, 3);
+  const third = await recorder.saveFallback("s", { bytes: longer, contentType: "video/webm", recordingUrl: url });
+  assert.equal(third.ok, true);
+  if (first.ok && third.ok) assert.equal(third.recordingId, first.recordingId);
+  assert.equal(recorder.fallbackFile("s")?.bytes.length, longer.length);
+  assert.equal(recorder.fallbackFile("s")?.bytes[0], 3);
+  assert.equal(patches.length, 2);
+});
+
 test("repeated room list failures use the browser fallback", async () => {
   const recorder = createCallRecorder({
     egress: fakeEgress(),
@@ -392,6 +434,21 @@ test("fallback upload is served and patched when cloud egress is blocked", async
     const again = await api(base, `/sessions/${id}/call-recording`);
     assert.equal(again.body?.mode, "fallback");
     assert.equal(again.body?.recordingId, postedBody.recordingId);
+
+    const longer = new FormData();
+    longer.set("video", new File([Buffer.alloc(32, 7)], "call.webm", { type: "video/webm" }));
+    const replaced = await fetch(`${base}/sessions/${id}/call-recording`, { method: "POST", body: longer });
+    assert.equal(replaced.status, 201);
+    const short = new FormData();
+    short.set("video", new File([Buffer.from("x")], "call.webm", { type: "video/webm" }));
+    const kept = await fetch(`${base}/sessions/${id}/call-recording`, { method: "POST", body: short });
+    const keptBody = (await kept.json()) as { recordingId?: string };
+    assert.equal(kept.status, 201);
+    assert.equal(keptBody.recordingId, postedBody.recordingId);
+    const fileAgain = await fetch(`${base}/sessions/${id}/call-recording/file.webm`);
+    const bytes = Buffer.from(await fileAgain.arrayBuffer());
+    assert.equal(bytes.length, 32);
+    assert.equal(bytes[0], 7);
   });
 });
 

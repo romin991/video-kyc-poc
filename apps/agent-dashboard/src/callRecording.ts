@@ -1,93 +1,278 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createCallTape, type CallTape } from "../../api/src/callMediaRelease";
+import {
+  createCallTape,
+  fallbackRecorderAction,
+  selectLongerRecording,
+  type CallTape,
+} from "../../api/src/callMediaRelease";
 import { getCallRecording, uploadCallRecording, type CallRecordingMode } from "./api";
+
+const REMOTE_TILE = '[data-livekit="remote"]';
+const LOCAL_TILE = '[data-livekit="local"]';
+const VIDEO_BITS_PER_SECOND = 450_000;
+const AUDIO_BITS_PER_SECOND = 64_000;
+
+interface RunningTape {
+  stop: () => Promise<Blob>;
+  state: () => string;
+  rebind: () => void;
+}
+
+interface OwnedStream {
+  stream: MediaStream;
+  rebind: () => void;
+  close: () => void;
+}
 
 /**
  * Records the customer tile plus both microphones when Cloud egress cannot
- * start. The original LiveKit tracks are left running until the room releases.
+ * start. The recorded stream is one the desk owns, so a LiveKit track swap
+ * does not stop MediaRecorder. The original tracks stay up until the room
+ * releases.
  */
-export function startTileRecording(): CallTape | null {
-  const remote = document.querySelector<HTMLVideoElement>('[data-livekit="remote"]');
-  const local = document.querySelector<HTMLVideoElement>('[data-livekit="local"]');
-  const remoteStream = remote?.srcObject instanceof MediaStream ? remote.srcObject : null;
-  if (!remoteStream || remoteStream.getVideoTracks().length === 0) return null;
-  const localStream = local?.srcObject instanceof MediaStream ? local.srcObject : null;
+export function startTileRecording(): RunningTape | null {
+  const remote = document.querySelector<HTMLVideoElement>(REMOTE_TILE);
+  const remoteStream = mediaStreamOf(remote);
+  const liveVideo = remoteStream?.getVideoTracks().some((track) => track.readyState !== "ended") === true;
+  if (!remote || !remoteStream || !liveVideo) return null;
 
-  let closeMix: () => void = () => undefined;
-  let stream = remoteStream;
-  try {
-    const mixed = mixCallAudio(remoteStream, localStream);
-    stream = mixed.stream;
-    closeMix = mixed.close;
-  } catch (error) {
-    console.error("[vkyc] call audio mix failed; recording the customer tile only", error);
-  }
+  const owned = openOwnedStream(remote) ?? openDirectStream(remoteStream);
+  if (!owned) return null;
 
   try {
-    const mimeType = pickMime();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const recorder = openRecorder(owned.stream);
     const chunks: Blob[] = [];
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunks.push(event.data);
     };
+    owned.rebind();
     recorder.start(1000);
-    return createCallTape({
+    const tape: CallTape = createCallTape({
       recorder,
       chunks,
       close: () => {
         recorder.ondataavailable = null;
-        closeMix();
+        owned.close();
       },
     });
+    return {
+      stop: () => tape.stop(),
+      state: () => recorder.state,
+      rebind: () => owned.rebind(),
+    };
   } catch (error) {
-    closeMix();
+    owned.close();
     console.error("[vkyc] browser call recorder failed to start", error);
     return null;
   }
 }
 
-function mixCallAudio(
-  remote: MediaStream,
-  local: MediaStream | null,
-): { stream: MediaStream; close: () => void } {
-  const audioSources = [remote, local].filter((item): item is MediaStream => item !== null && item.getAudioTracks().length > 0);
-  const video = remote.getVideoTracks()[0];
-  if (!video || audioSources.length < 2) {
-    return { stream: remote, close: () => undefined };
+function openOwnedStream(remote: HTMLVideoElement): OwnedStream | null {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context || typeof canvas.captureStream !== "function") return null;
+
+  const size = frameSize(remote);
+  canvas.width = size.width;
+  canvas.height = size.height;
+  drawTile(context, canvas);
+
+  let canvasStream: MediaStream;
+  try {
+    canvasStream = canvas.captureStream(15);
+  } catch (error) {
+    console.error("[vkyc] canvas capture failed", error);
+    return null;
   }
-  const context = new AudioContext();
-  void context.resume().catch(() => undefined);
-  const destination = context.createMediaStreamDestination();
-  const nodes = audioSources.map((source) => {
-    const node = context.createMediaStreamSource(source);
-    node.connect(destination);
-    return node;
-  });
-  const mixedAudio = destination.stream.getAudioTracks();
-  const stream = new MediaStream([video, ...mixedAudio]);
+  const videoTrack = canvasStream.getVideoTracks()[0];
+  if (!videoTrack) return null;
+
+  const mix = openAudioMix();
+  const tracks = mix ? [videoTrack, mix.track] : [videoTrack];
+  let frame = 0;
   let closed = false;
+
+  const paint = () => {
+    if (closed) return;
+    drawTile(context, canvas);
+    mix?.rebind();
+    frame = window.requestAnimationFrame(paint);
+  };
+  frame = window.requestAnimationFrame(paint);
+
   return {
-    stream,
+    stream: new MediaStream(tracks),
+    rebind: () => {
+      mix?.rebind();
+    },
     close: () => {
       if (closed) return;
       closed = true;
-      nodes.forEach((node) => {
+      window.cancelAnimationFrame(frame);
+      mix?.close();
+      try {
+        videoTrack.stop();
+      } catch {
+        // The canvas track already ended.
+      }
+    },
+  };
+}
+
+function drawTile(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement): void {
+  const video = document.querySelector<HTMLVideoElement>(REMOTE_TILE);
+  if (!video || video.videoWidth < 2 || video.videoHeight < 2) return;
+  const scale = Math.min(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
+  const width = video.videoWidth * scale;
+  const height = video.videoHeight * scale;
+  const x = (canvas.width - width) / 2;
+  const y = (canvas.height - height) / 2;
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(video, x, y, width, height);
+}
+
+function frameSize(video: HTMLVideoElement): { width: number; height: number } {
+  const stream = mediaStreamOf(video);
+  const track = stream?.getVideoTracks().find((item) => item.readyState !== "ended");
+  const settings = track?.getSettings() ?? {};
+  const width = video.videoWidth || settings.width || 720;
+  const height = video.videoHeight || settings.height || 1280;
+  return { width: even(width), height: even(height) };
+}
+
+function even(value: number): number {
+  const rounded = Math.max(2, Math.round(value));
+  return rounded % 2 === 0 ? rounded : rounded - 1;
+}
+
+function openDirectStream(remoteStream: MediaStream): OwnedStream | null {
+  const video = remoteStream.getVideoTracks().find((track) => track.readyState !== "ended");
+  if (!video) return null;
+  const cloned = video.clone();
+  const mix = openAudioMix();
+  return {
+    stream: new MediaStream(mix ? [cloned, mix.track] : [cloned]),
+    rebind: () => {
+      mix?.rebind();
+    },
+    close: () => {
+      mix?.close();
+      try {
+        cloned.stop();
+      } catch {
+        // The cloned customer track already ended.
+      }
+    },
+  };
+}
+
+function openAudioMix(): { track: MediaStreamTrack; rebind: () => void; close: () => void } | null {
+  try {
+    const context = new AudioContext();
+    void context.resume().catch(() => undefined);
+    const destination = context.createMediaStreamDestination();
+    const connected = new Map<string, MediaStreamAudioSourceNode>();
+    let signature = "";
+    let closed = false;
+    const track = destination.stream.getAudioTracks()[0];
+    if (!track) {
+      void context.close().catch(() => undefined);
+      return null;
+    }
+
+    const rebind = () => {
+      if (closed || context.state === "closed") return;
+      void context.resume().catch(() => undefined);
+      const live = liveAudioTracks();
+      const next = live.map((item) => item.key).join("|");
+      if (next === signature) return;
+      signature = next;
+      for (const node of connected.values()) {
         try {
           node.disconnect();
         } catch {
           // The node is already disconnected.
         }
-      });
-      for (const track of mixedAudio) {
+      }
+      connected.clear();
+      for (const item of live) {
+        try {
+          const node = context.createMediaStreamSource(new MediaStream([item.track]));
+          node.connect(destination);
+          connected.set(item.key, node);
+        } catch (error) {
+          console.error("[vkyc] call audio mix skipped a track", error);
+        }
+      }
+    };
+
+    return {
+      track,
+      rebind,
+      close: () => {
+        if (closed) return;
+        closed = true;
+        signature = "\0";
+        for (const node of connected.values()) {
+          try {
+            node.disconnect();
+          } catch {
+            // The node is already disconnected.
+          }
+        }
+        connected.clear();
         try {
           track.stop();
         } catch {
           // The mix track already ended.
         }
-      }
-      void context.close().catch(() => undefined);
-    },
+        void context.close().catch(() => undefined);
+      },
+    };
+  } catch (error) {
+    console.error("[vkyc] call audio mix failed; recording the customer tile only", error);
+    return null;
+  }
+}
+
+function liveAudioTracks(): Array<{ key: string; track: MediaStreamTrack }> {
+  const found: Array<{ key: string; track: MediaStreamTrack }> = [];
+  for (const source of ["remote", "local"] as const) {
+    const stream = mediaStreamOf(document.querySelector<HTMLVideoElement>(source === "remote" ? REMOTE_TILE : LOCAL_TILE));
+    if (!stream) continue;
+    for (const track of stream.getAudioTracks()) {
+      if (track.readyState !== "live") continue;
+      found.push({ key: `${source}:${track.id}`, track });
+    }
+  }
+  return found;
+}
+
+function mediaStreamOf(element: HTMLVideoElement | null): MediaStream | null {
+  return element?.srcObject instanceof MediaStream ? element.srcObject : null;
+}
+
+function openRecorder(stream: MediaStream): MediaRecorder {
+  const mimeType = pickMime();
+  const rated: MediaRecorderOptions = {
+    videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+    audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
   };
+  if (mimeType) rated.mimeType = mimeType;
+  try {
+    return new MediaRecorder(stream, rated);
+  } catch {
+    // This browser rejected the bitrate or the mime type.
+  }
+  if (mimeType) {
+    try {
+      return new MediaRecorder(stream, { mimeType });
+    } catch {
+      // Fall through to the default type.
+    }
+  }
+  return new MediaRecorder(stream);
 }
 
 function pickMime(): string | undefined {
@@ -102,66 +287,151 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
   stopAndUpload: (endingSessionId: string) => Promise<void>;
 } {
   const [mode, setMode] = useState<CallRecordingMode | "unknown">("unknown");
-  const tape = useRef<CallTape | null>(null);
+  const active = useRef<RunningTape | null>(null);
+  const retained = useRef<Blob | null>(null);
+  const ending = useRef(false);
   const timerRef = useRef(0);
+  const chain = useRef<Promise<void>>(Promise.resolve());
+  const sent = useRef<{ id: string; bytes: number }>({ id: "", bytes: 0 });
   const sessionRef = useRef(sessionId);
   const agentRef = useRef(agentName);
+  const mediaRef = useRef(mediaConnected);
+  const modeRef = useRef<CallRecordingMode | "unknown">(mode);
   sessionRef.current = sessionId;
   agentRef.current = agentName;
+  mediaRef.current = mediaConnected;
+  modeRef.current = mode;
 
-  const takeTape = (): CallTape | null => {
-    const current = tape.current;
-    tape.current = null;
-    return current;
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    const run = chain.current.then(task, task);
+    chain.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
+  const rememberMode = (next: CallRecordingMode | "unknown") => {
+    modeRef.current = next;
+    setMode(next);
+  };
+
+  const uploadBlob = async (targetSessionId: string, blob: Blob): Promise<void> => {
+    if (blob.size === 0) return;
+    if (sent.current.id === targetSessionId && blob.size < sent.current.bytes) {
+      console.warn(
+        `[vkyc] skipped shorter call recording (${blob.size} bytes < ${sent.current.bytes} bytes)`,
+      );
+      return;
+    }
+    await uploadCallRecording(targetSessionId, agentRef.current, blob);
+    if (sent.current.id !== targetSessionId || blob.size > sent.current.bytes) {
+      sent.current = { id: targetSessionId, bytes: blob.size };
+    }
+  };
+
+  const longestBlob = async (running: RunningTape | null, kept: Blob | null): Promise<Blob | null> => {
+    let best = kept;
+    if (running) {
+      try {
+        best = selectLongerRecording(best, await running.stop());
+      } catch (error) {
+        console.error("[vkyc] call recorder stop failed", error);
+      }
+    }
+    return best && best.size > 0 ? best : null;
   };
 
   // Layout so the recorder and its poll stop before useLiveKit's passive
   // cleanup disconnects the room and stops the camera tracks.
   useLayoutEffect(() => {
+    ending.current = false;
     const endingSessionId = sessionId;
     return () => {
+      ending.current = true;
       window.clearInterval(timerRef.current);
       timerRef.current = 0;
-      const current = takeTape();
-      if (!current) return;
-      void current.stop().then(async (blob) => {
-        if (!endingSessionId || blob.size === 0) return;
+      if (!endingSessionId) return;
+      void enqueue(async () => {
+        const running = active.current;
+        const kept = retained.current;
+        active.current = null;
+        retained.current = null;
+        const blob = await longestBlob(running, kept);
+        if (!blob) return;
         try {
-          await uploadCallRecording(endingSessionId, agentRef.current, blob);
+          await uploadBlob(endingSessionId, blob);
         } catch (error) {
           console.error("[vkyc] call recorder teardown failed", error);
         }
-      }).catch((error: unknown) => {
-        console.error("[vkyc] call recorder teardown failed", error);
       });
     };
   }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
-      setMode("unknown");
+      rememberMode("unknown");
       return;
     }
+    if (ending.current) return;
     let cancelled = false;
-    const tick = async () => {
-      try {
-        const status = await getCallRecording(sessionId, agentRef.current);
-        if (cancelled || sessionRef.current !== sessionId) return;
-        setMode(status.mode);
-        if (status.mode === "fallback" && mediaConnected && !tape.current) {
-          const started = startTileRecording();
-          if (cancelled || sessionRef.current !== sessionId) {
-            void started?.stop();
+    let ticking = false;
+    const tick = () => {
+      if (ticking || cancelled || ending.current) return;
+      ticking = true;
+      void enqueue(async () => {
+        try {
+          if (cancelled || ending.current || sessionRef.current !== sessionId) return;
+          let statusMode: CallRecordingMode | "unknown";
+          try {
+            const status = await getCallRecording(sessionId, agentRef.current);
+            if (cancelled || ending.current || sessionRef.current !== sessionId) return;
+            statusMode = status.mode;
+            rememberMode(status.mode);
+          } catch {
+            if (!cancelled) rememberMode("unknown");
             return;
           }
-          tape.current = started;
+          const action = fallbackRecorderAction({
+            mode: statusMode,
+            mediaConnected: mediaRef.current,
+            ending: ending.current,
+            recorderState: active.current?.state() ?? null,
+          });
+          if (action === "keep") {
+            active.current?.rebind();
+            return;
+          }
+          if (action === "restart") {
+            console.warn("[vkyc] browser call recorder stopped during the call; starting again");
+          }
+          if (active.current) {
+            const running = active.current;
+            active.current = null;
+            try {
+              const blob = await running.stop();
+              if (!cancelled && sessionRef.current === sessionId) {
+                retained.current = selectLongerRecording(retained.current, blob);
+              }
+            } catch (error) {
+              console.error("[vkyc] call recorder stop failed", error);
+            }
+          }
+          if (cancelled || ending.current || sessionRef.current !== sessionId || !mediaRef.current) return;
+          const started = startTileRecording();
+          if (!started) return;
+          if (cancelled || ending.current || sessionRef.current !== sessionId) {
+            void started.stop();
+            return;
+          }
+          active.current = started;
+        } finally {
+          ticking = false;
         }
-      } catch {
-        if (!cancelled) setMode("unknown");
-      }
+      });
     };
-    void tick();
-    const timer = window.setInterval(() => void tick(), 1000);
+    tick();
+    const timer = window.setInterval(tick, 1000);
     timerRef.current = timer;
     return () => {
       cancelled = true;
@@ -172,11 +442,19 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
 
   async function stopAndUpload(endingSessionId: string): Promise<void> {
     if (sessionRef.current !== endingSessionId) return;
-    const current = takeTape();
-    if (!current) return;
-    const blob = await current.stop();
-    if (blob.size === 0) return;
-    await uploadCallRecording(endingSessionId, agentRef.current, blob);
+    ending.current = true;
+    window.clearInterval(timerRef.current);
+    timerRef.current = 0;
+    await enqueue(async () => {
+      if (sessionRef.current !== endingSessionId) return;
+      const running = active.current;
+      const kept = retained.current;
+      active.current = null;
+      retained.current = null;
+      const blob = await longestBlob(running, kept);
+      if (!blob) return;
+      await uploadBlob(endingSessionId, blob);
+    });
   }
 
   return { mode, stopAndUpload };
