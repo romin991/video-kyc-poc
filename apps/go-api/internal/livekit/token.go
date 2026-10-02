@@ -1,9 +1,7 @@
 // Package livekit mints participant JWTs for room vkyc-${sessionId}.
 //
-// This is the Go equivalent of livekit-server-sdk AccessToken. The parallel
-// LiveKit client agent owns camera publish in packages/vkyc-livekit. If that
-// branch lands a mint package first, call it from ParticipantToken instead of
-// duplicating the grant logic here.
+// This is the Go equivalent of livekit-server-sdk AccessToken. Browser
+// Room.connect, camera publish, and End teardown live in packages/vkyc-livekit.
 package livekit
 
 import (

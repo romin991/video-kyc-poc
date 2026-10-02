@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/livekit/protocol/auth"
 )
 
 const (
@@ -51,6 +53,21 @@ func TestParticipantTokenMintsRoomJoinJWT(t *testing.T) {
 	ttl := exp - nbf
 	if ttl < 540 || ttl > 660 {
 		t.Fatalf("ttl = %v, want ~600s", ttl)
+	}
+
+	parsed, err := auth.ParseAPIToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := parsed.Verify(testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Identity != "agent" || verified.Video == nil || verified.Video.Room != room || !verified.Video.RoomJoin {
+		t.Fatalf("verified grants = %+v", verified.Video)
+	}
+	if !verified.Video.GetCanPublish() || !verified.Video.GetCanSubscribe() {
+		t.Fatalf("publish/subscribe = %+v", verified.Video)
 	}
 }
 
