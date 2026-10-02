@@ -21,17 +21,29 @@ const (
 )
 
 // Session is one video-KYC call shell.
+// Manual-auth answers, the digit prompt, the checklist, and stills sit on the
+// same record as the call. Image bytes live beside it, keyed by capture id.
 type Session struct {
-	ID         string
-	JoinToken  string
-	Status     Status
-	RoomName   string
-	CreatedAt  time.Time
-	CreatedBy  string
-	ClaimedBy  string
-	AcceptedAt time.Time
-	EndedAt    time.Time
-	arrival    int
+	ID               string
+	JoinToken        string
+	Status           Status
+	RoomName         string
+	CreatedAt        time.Time
+	CreatedBy        string
+	ClaimedBy        string
+	AcceptedAt       time.Time
+	EndedAt          time.Time
+	Checklist        []ChecklistItem
+	CaptureGuide     *CaptureKind
+	MaPrompt         *MaPrompt
+	MaAnswers        []MaAnswer
+	DigitChallenge   *DigitChallenge
+	DigitResponse    *string
+	DigitRespondedAt time.Time
+	MaMatch          *bool
+	DigitMatch       *bool
+	Captures         []Capture
+	arrival          int
 }
 
 // Store is safe for concurrent HTTP handlers.
@@ -39,6 +51,7 @@ type Store struct {
 	mu       sync.Mutex
 	sessions map[string]*Session
 	byToken  map[string]string
+	blobs    map[string][]byte
 	arrival  int
 }
 
@@ -46,6 +59,7 @@ func NewStore() *Store {
 	return &Store{
 		sessions: make(map[string]*Session),
 		byToken:  make(map[string]string),
+		blobs:    make(map[string][]byte),
 	}
 }
 
@@ -67,6 +81,9 @@ func (s *Store) Create(createdBy string, now time.Time) *Session {
 		RoomName:  RoomName(""),
 		CreatedAt: now.UTC(),
 		CreatedBy: createdBy,
+		Checklist: defaultChecklist(),
+		MaAnswers: []MaAnswer{},
+		Captures:  []Capture{},
 		arrival:   s.arrival,
 	}
 	session.RoomName = RoomName(session.ID)
@@ -145,9 +162,11 @@ func (s *Store) QueuePosition(id string) int {
 type AcceptError string
 
 const (
-	ErrNotFound AcceptError = "not_found"
-	ErrConflict AcceptError = "conflict"
-	ErrEmpty    AcceptError = "empty"
+	ErrNotFound   AcceptError = "not_found"
+	ErrConflict   AcceptError = "conflict"
+	ErrEmpty      AcceptError = "empty"
+	ErrBadRequest AcceptError = "bad_request"
+	ErrLimit      AcceptError = "limit"
 )
 
 // Accept moves one waiting session to in_call.
@@ -207,8 +226,35 @@ func (s *Store) End(id string, now time.Time) (*Session, AcceptError) {
 }
 
 func clone(session *Session) *Session {
-	copy := *session
-	return &copy
+	next := *session
+	next.Checklist = append([]ChecklistItem(nil), session.Checklist...)
+	next.MaAnswers = append([]MaAnswer(nil), session.MaAnswers...)
+	next.Captures = append([]Capture(nil), session.Captures...)
+	if session.CaptureGuide != nil {
+		value := *session.CaptureGuide
+		next.CaptureGuide = &value
+	}
+	if session.MaPrompt != nil {
+		value := *session.MaPrompt
+		next.MaPrompt = &value
+	}
+	if session.DigitChallenge != nil {
+		value := *session.DigitChallenge
+		next.DigitChallenge = &value
+	}
+	if session.DigitResponse != nil {
+		value := *session.DigitResponse
+		next.DigitResponse = &value
+	}
+	if session.MaMatch != nil {
+		value := *session.MaMatch
+		next.MaMatch = &value
+	}
+	if session.DigitMatch != nil {
+		value := *session.DigitMatch
+		next.DigitMatch = &value
+	}
+	return &next
 }
 
 func beforeWaiting(a, b *Session) bool {

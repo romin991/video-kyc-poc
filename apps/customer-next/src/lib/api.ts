@@ -1,5 +1,19 @@
 export type SessionStatus = "waiting" | "in_call" | "ended";
 
+export type CaptureKind = "face" | "id" | "selfie_ktp" | "other";
+
+export interface MaPrompt {
+  field: string;
+  prompt: string;
+  sentAt: string;
+}
+
+export interface DigitChallenge {
+  digits: string;
+  prompt: string;
+  sentAt: string;
+}
+
 export interface JoinInfo {
   sessionId: string;
   roomName: string;
@@ -7,6 +21,15 @@ export interface JoinInfo {
   status: SessionStatus;
   queuePosition: number | null;
   livekitUrl: string;
+  captureGuide: CaptureKind | null;
+  maPrompt: MaPrompt | null;
+  digitChallenge: DigitChallenge | null;
+}
+
+export interface ReplyResult {
+  ok: boolean;
+  maPrompt: MaPrompt | null;
+  digitChallenge: DigitChallenge | null;
 }
 
 export interface EndResult {
@@ -53,6 +76,26 @@ export async function fetchJoin(token: string): Promise<JoinInfo> {
   const data = await read(response);
   if (!response.ok) throw new ApiError(messageOf(data, response.statusText), response.status);
   return data as JoinInfo;
+}
+
+export async function postJoinReply(
+  token: string,
+  body: { answer?: string; digitResponse?: string },
+): Promise<ReplyResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/join/${encodeURIComponent(token)}/replies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("Cannot reach the verification service.", 0);
+  }
+  const data = await read(response);
+  if (!response.ok) throw new ApiError(messageOf(data, response.statusText), response.status);
+  return data as ReplyResult;
 }
 
 export async function endSession(sessionId: string): Promise<EndResult> {

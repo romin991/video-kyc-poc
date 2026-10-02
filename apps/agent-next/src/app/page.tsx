@@ -2,6 +2,7 @@
 
 import { useCallMedia } from "@vkyc/livekit";
 import { useEffect, useState } from "react";
+import { KycDesk } from "@/app/kyc-desk";
 import {
   acceptSession,
   claimNextSession,
@@ -174,6 +175,7 @@ export default function DeskPage() {
       {error ? <p className="problem">{error}</p> : null}
 
       {call ? (
+        <>
         <CallStage
           call={call}
           busy={busy === "end"}
@@ -186,6 +188,8 @@ export default function DeskPage() {
             })
           }
         />
+        <KycDesk sessionId={call.sessionId} agentName={agent} />
+        </>
       ) : (
         <div className="actions">
           <button

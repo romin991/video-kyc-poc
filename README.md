@@ -2,7 +2,7 @@
 
 ## Company stack (R1) — product path
 
-Go API and two Next.js App Router shells. Session create, join-by-token, claim, accept, and end run here. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Manual authentication, digit prompts, captures, recording, and the workforce queue stay on that reference.
+Go API and two Next.js App Router shells. Session create, join-by-token, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Recording, after-call disposition, CRM and datalake stubs, and workforce management stay on that reference.
 
 Requires Go 1.23+ and Node.js 20+.
 
@@ -80,10 +80,92 @@ When `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, those tokens are LiveKi
 | `POST` | `/sessions/claim` | oldest waiting session → in call |
 | `POST` | `/sessions/:id/accept` | that waiting session → in call |
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
-| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, queuePosition, livekitUrl }` |
+| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, queuePosition, livekitUrl, captureGuide, maPrompt, digitChallenge }` |
+| `POST` | `/join/:token/replies` | customer `answer` and/or `digitResponse` while the call is open |
+| `PATCH` | `/sessions/:id` | `checklist`, `captureGuide`, `maPrompt`, `digitChallenge`, `maMatch`, `digitMatch` |
+| `POST` | `/sessions/:id/captures` | JSON `{ image, kind }` JPEG or PNG, 4 MB |
+| `GET` | `/sessions/:id/captures/:captureId` | JPEG or PNG bytes |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api", stack: "go" }` |
 
-CORS allows the Next.js origins (`127.0.0.1` and `localhost` on ports 3000 and 3002) and the Vite reference origins. `OPTIONS` returns 204.
+CORS allows the Next.js origins (`127.0.0.1` and `localhost` on ports 3000 and 3002) and the Vite reference origins. Methods are `GET`, `POST`, `PATCH`, and `OPTIONS`. `OPTIONS` returns 204.
+
+## R2 manual authentication
+
+The agent drives the questions from the in-call desk. The customer poll (`GET /join/:token`, about every 1.5s) returns the active prompt. The customer posts a reply. The desk poll (`GET /sessions/:id`, about every 2s) shows the log. Pass and fail are booleans on the session. They do not call a bureau, OCR, or liveness model. Approve, Reject, UTV, ACW notes, recording, CRM, and datalake are not on this API.
+
+A new session has `maPrompt: null`, `maAnswers: []`, `digitChallenge: null`, `digitResponse: null`, `digitRespondedAt: null`, `maMatch: null`, `digitMatch: null`, `captureGuide: null`, and three unchecked checklist items: `identity_match`, `liveness_digits`, `docs_shown`.
+
+### Questions
+
+`PATCH /sessions/:id` with `{ "maPrompt": { "field": "full_name" } }`. `field` is `full_name`, `dob`, or `mothers_maiden_name`. Omit `prompt` and the server uses “Please type your full name.”, “Please type your date of birth.”, or “Please type your mother's maiden name.” A custom `prompt` is optional, 240 characters max. `{ "maPrompt": null }` clears the question and keeps answers already logged.
+
+`POST /join/:token/replies` with `{ "answer": "Ayu Prameswari" }` stores one `maAnswers` entry for that field and clears `maPrompt`. Asking the same field again replaces that entry and keeps its place in the log. The reply is trimmed, 200 characters max. It is stored only while `status` is `in_call` and a question is waiting. Otherwise the API returns `409`.
+
+`{ "maMatch": true }` checks **Identity match**. `{ "maMatch": false }` unchecks it. `null` clears the toggle and leaves the tick alone.
+
+### Digits
+
+`{ "digitChallenge": { "digits": "4821" } }`. `digits` is 4 to 6 numerals. Spaces are stripped. The stored prompt is “Please say these digits, then type them here: 4 8 2 1”. Sending a new challenge clears `digitResponse`. `{ "digitChallenge": null }` clears the prompt and keeps the last reply.
+
+The customer posts `{ "digitResponse": "4821" }` (digits and spaces, 16 characters max). That stores `digitResponse`, sets `digitRespondedAt`, clears `digitChallenge`, and checks **Liveness digits spoken**. `{ "digitMatch": true }` also checks that item. Fail does not uncheck it.
+
+`answer` and `digitResponse` may be sent in one POST when both prompts are active.
+
+### Stills
+
+| Desk label | Stored `kind` |
+| --- | --- |
+| Face | `face` |
+| ID | `id` |
+| Selfie + KTP | `selfie_ktp` |
+| Extra doc | `other` (`doc` is accepted and stored as `other`) |
+
+Changing **Kind** sets `captureGuide`. The customer card outline and the line “align ID inside the box” stay on only while the guide is `id`. **Capture still** grabs one JPEG from the remote customer tile (`video[data-livekit="remote"]`) when that frame is live. **Add still** uploads a JPEG or PNG data URL, which is enough when cameras are off. An `id`, `selfie_ktp`, or `other` still checks **Documents shown**. A face still does not. A session stores at most 20 stills.
+
+The thin disposition of the call is those three checklist ticks plus the two stub toggles. There is no Approve, Reject, or UTV on this desk.
+
+### QA
+
+```bash
+export CUSTOMER_APP_ORIGIN=http://127.0.0.1:3002
+# Go API already running on 127.0.0.1:3001
+
+ID=$(curl -s -X POST http://127.0.0.1:3001/sessions -H 'content-type: application/json' -d '{}' | jq -r .id)
+TOKEN=$(curl -s http://127.0.0.1:3001/sessions/$ID | jq -r .joinToken)
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/accept -H 'x-demo-agent: Desk 1' >/dev/null
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maPrompt":{"field":"full_name"}}'
+curl -s http://127.0.0.1:3001/join/$TOKEN | jq .maPrompt
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"answer":"Ayu Prameswari"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maPrompt":{"field":"dob"}}'
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"answer":"1994-03-15"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maPrompt":{"field":"mothers_maiden_name"}}'
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"answer":"Wijaya"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maPrompt":{"field":"dob"}}'
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"answer":"1-1-1"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"digitChallenge":{"digits":"4821"}}'
+curl -s -X POST http://127.0.0.1:3001/join/$TOKEN/replies -H 'content-type: application/json' \
+  -d '{"digitResponse":"4821"}'
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' \
+  -d '{"maMatch":true,"digitMatch":true}'
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/captures -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"selfie_ktp"}' >/dev/null
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/captures -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"doc"}' >/dev/null
+curl -s http://127.0.0.1:3001/sessions/$ID | jq '{maAnswers,digitResponse,maMatch,digitMatch,checklist,captures:[.captures[].kind]}'
+```
+
+The log stays in first-asked order: full name `Ayu Prameswari`, date of birth `1-1-1` (the re-ask replaced `1994-03-15`), mother's maiden name `Wijaya`. `digitResponse` is `4821`. Identity match and liveness are checked. Captures are `selfie_ktp` and `other`, and **Documents shown** is checked. A face still does not check it.
+
+On the desk, open the customer join link, accept the session, and repeat the questions from **Manual authentication**. The customer page shows the prompt and a reply field. Set **Kind** to **ID** and the customer camera frame shows the card outline. **Face**, **Selfie + KTP**, or **Extra doc** removes it. **End session** still closes the LiveKit call. There is no after-call disposition screen.
 
 Mint lives in `apps/go-api/internal/livekit`. Browser `Room.connect`, publish, subscribe, and End teardown live only in `packages/vkyc-livekit`. The agent and customer shells call `useCallMedia` and do not open a second room.
 
@@ -95,9 +177,9 @@ pnpm --filter @vkyc/agent-next --filter @vkyc/customer-next --filter @vkyc/livek
 ### Layout
 
 ```
-apps/go-api            Go session API, in-memory store, LiveKit JWT mint
-apps/agent-next        Next.js agent desk (create, claim, accept, end)
-apps/customer-next     Next.js customer join (token link, end)
+apps/go-api            Go session API, in-memory store, LiveKit JWT mint, manual auth, stills
+apps/agent-next        Next.js agent desk (create, claim, accept, prompts, captures, end)
+apps/customer-next     Next.js customer join (token link, prompts, ID guide, end)
 packages/vkyc-livekit  livekit-client connect hook shared by both shells
 ```
 
