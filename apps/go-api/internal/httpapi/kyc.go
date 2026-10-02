@@ -75,7 +75,51 @@ func parsePatch(raw json.RawMessage) (session.Patch, string) {
 		patch.HasDigitMatch = true
 		patch.DigitMatch = flag
 	}
+	if value, ok := obj["acwNotes"]; ok {
+		notes, message := parseAcwNotes(value)
+		if message != "" {
+			return session.Patch{}, message
+		}
+		patch.HasAcwNotes = true
+		patch.AcwNotes = notes
+	}
+	if value, ok := obj["disposition"]; ok {
+		disposition, message := parseDisposition(value)
+		if message != "" {
+			return session.Patch{}, message
+		}
+		patch.HasDisposition = true
+		patch.Disposition = disposition
+	}
 	return patch, ""
+}
+
+func parseAcwNotes(raw json.RawMessage) (string, string) {
+	var notes string
+	if err := json.Unmarshal(raw, &notes); err != nil {
+		return "", "acwNotes must be a string"
+	}
+	if len(notes) > session.NoteMaxChars {
+		return "", "acwNotes must be 4000 characters or fewer"
+	}
+	return notes, ""
+}
+
+func parseDisposition(raw json.RawMessage) (*string, string) {
+	if string(raw) == "null" {
+		return nil, ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil || strings.TrimSpace(text) == "" {
+		return nil, "disposition must be Approve, Reject, or UTV"
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case session.DispositionApprove, session.DispositionReject, session.DispositionUTV:
+		value := strings.ToLower(strings.TrimSpace(text))
+		return &value, ""
+	default:
+		return nil, "disposition must be Approve, Reject, or UTV"
+	}
 }
 
 func parseReply(raw json.RawMessage) (session.Reply, string) {

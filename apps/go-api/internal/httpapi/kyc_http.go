@@ -61,6 +61,9 @@ func (s *Server) patch(w http.ResponseWriter, r *http.Request) {
 	if writeStoreError(w, code, message) {
 		return
 	}
+	if patch.HasDisposition && patch.Disposition != nil {
+		s.deliverDisposition(r, item, *patch.Disposition)
+	}
 	writeJSON(w, http.StatusOK, s.sessionJSON(r, item))
 }
 
@@ -151,6 +154,8 @@ func writeStoreError(w http.ResponseWriter, code session.AcceptError, message st
 		writeError(w, http.StatusConflict, "conflict", message)
 	case session.ErrLimit:
 		writeError(w, http.StatusConflict, "limit", message)
+	case session.ErrCaptureRequired:
+		writeError(w, http.StatusUnprocessableEntity, "capture_required", message)
 	default:
 		writeError(w, http.StatusBadRequest, "bad_request", message)
 	}

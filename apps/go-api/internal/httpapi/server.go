@@ -1,7 +1,7 @@
 // Package httpapi is the session shell: create, join-by-token, claim, accept,
-// and end, plus manual authentication, digit prompts, checklist ticks, and
-// still captures. Recording and after-call disposition stay on the Express
-// reference.
+// and end, plus manual authentication, digit prompts, checklist ticks, still
+// captures, after-call disposition, and the recording hooks the desk plays.
+// LiveKit egress and the browser MediaRecorder stay out of this process.
 package httpapi
 
 import (
@@ -15,6 +15,7 @@ import (
 	"github.com/romin991/video-kyc-poc/apps/go-api/internal/config"
 	"github.com/romin991/video-kyc-poc/apps/go-api/internal/livekit"
 	"github.com/romin991/video-kyc-poc/apps/go-api/internal/session"
+	"github.com/romin991/video-kyc-poc/apps/go-api/internal/stub"
 )
 
 // Server is the session HTTP API.
@@ -24,6 +25,7 @@ type Server struct {
 	corsOrigins    map[string]struct{}
 	livekitURL     string
 	minter         livekit.Minter
+	stubs          *stub.Service
 	now            func() time.Time
 }
 
@@ -46,10 +48,12 @@ func New(store *session.Store, cfg config.Config, minter livekit.Minter) http.Ha
 		corsOrigins:    allowed,
 		livekitURL:     cfg.LiveKitURL,
 		minter:         minter,
+		stubs:          stub.New(cfg.CRMWebhookURL, cfg.DatalakeWebhookURL, cfg.DispositionLogPath),
 		now:            time.Now,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", srv.health)
+	mux.HandleFunc("GET /disposition-stubs", srv.listStubs)
 	mux.HandleFunc("POST /sessions", srv.create)
 	mux.HandleFunc("GET /sessions", srv.list)
 	mux.HandleFunc("POST /sessions/claim", srv.claim)
@@ -57,7 +61,12 @@ func New(store *session.Store, cfg config.Config, minter livekit.Minter) http.Ha
 	mux.HandleFunc("PATCH /sessions/{id}", srv.patch)
 	mux.HandleFunc("POST /sessions/{id}/accept", srv.accept)
 	mux.HandleFunc("POST /sessions/{id}/end", srv.end)
+	mux.HandleFunc("POST /sessions/{id}/recording", srv.attachRecording)
+	mux.HandleFunc("POST /sessions/{id}/call-recording", srv.uploadRecording)
+	mux.HandleFunc("GET /sessions/{id}/call-recording/file.webm", srv.recordingFile)
+	mux.HandleFunc("GET /sessions/{id}/call-recording/file.mp4", srv.recordingFile)
 	mux.HandleFunc("POST /sessions/{id}/captures", srv.createCapture)
+	mux.HandleFunc("GET /sessions/{id}/captures", srv.listCaptures)
 	mux.HandleFunc("GET /sessions/{id}/captures/{captureId}", srv.getCapture)
 	mux.HandleFunc("GET /join/{token}", srv.join)
 	mux.HandleFunc("POST /join/{token}/replies", srv.reply)
@@ -207,27 +216,32 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sessionJSON(r *http.Request, item *session.Session) sessionBody {
 	body := sessionBody{
-		ID:               item.ID,
-		JoinURL:          s.customerOrigin + "/join/" + item.JoinToken,
-		JoinToken:        item.JoinToken,
-		Status:           string(item.Status),
-		RoomName:         item.RoomName,
-		CreatedAt:        formatTime(item.CreatedAt),
-		CreatedBy:        item.CreatedBy,
-		DisplayName:      nilIfEmpty(item.DisplayName),
-		ClaimedBy:        nilIfEmpty(item.ClaimedBy),
-		QueuePosition:    positionPtr(s.store.QueuePosition(item.ID)),
-		LiveKitURL:       s.livekitURL,
-		Checklist:        checklistJSON(item.Checklist),
-		CaptureGuide:     kindString(item.CaptureGuide),
-		MaPrompt:         promptJSON(item.MaPrompt),
-		MaAnswers:        answersJSON(item.MaAnswers),
-		DigitChallenge:   digitJSON(item.DigitChallenge),
-		DigitResponse:    item.DigitResponse,
-		DigitRespondedAt: timePtr(item.DigitRespondedAt),
-		MaMatch:          item.MaMatch,
-		DigitMatch:       item.DigitMatch,
-		Captures:         captureListJSON(r, item),
+		ID:                  item.ID,
+		JoinURL:             s.customerOrigin + "/join/" + item.JoinToken,
+		JoinToken:           item.JoinToken,
+		Status:              string(item.Status),
+		RoomName:            item.RoomName,
+		CreatedAt:           formatTime(item.CreatedAt),
+		CreatedBy:           item.CreatedBy,
+		DisplayName:         nilIfEmpty(item.DisplayName),
+		ClaimedBy:           nilIfEmpty(item.ClaimedBy),
+		QueuePosition:       positionPtr(s.store.QueuePosition(item.ID)),
+		LiveKitURL:          s.livekitURL,
+		Checklist:           checklistJSON(item.Checklist),
+		CaptureGuide:        kindString(item.CaptureGuide),
+		MaPrompt:            promptJSON(item.MaPrompt),
+		MaAnswers:           answersJSON(item.MaAnswers),
+		DigitChallenge:      digitJSON(item.DigitChallenge),
+		DigitResponse:       item.DigitResponse,
+		DigitRespondedAt:    timePtr(item.DigitRespondedAt),
+		MaMatch:             item.MaMatch,
+		DigitMatch:          item.DigitMatch,
+		Captures:            captureListJSON(r, item),
+		AcwNotes:            item.AcwNotes,
+		Disposition:         nilIfEmpty(item.Disposition),
+		RecordingURL:        nilIfEmpty(item.RecordingURL),
+		RecordingID:         nilIfEmpty(item.RecordingID),
+		RecordingAttachedAt: timePtr(item.RecordingAttachedAt),
 	}
 	if !item.AcceptedAt.IsZero() {
 		value := formatTime(item.AcceptedAt)
@@ -253,29 +267,34 @@ func (s *Server) claimedJSON(item *session.Session) claimBody {
 }
 
 type sessionBody struct {
-	ID               string          `json:"id"`
-	JoinURL          string          `json:"joinUrl"`
-	JoinToken        string          `json:"joinToken"`
-	Status           string          `json:"status"`
-	RoomName         string          `json:"roomName"`
-	CreatedAt        string          `json:"createdAt"`
-	CreatedBy        string          `json:"createdBy"`
-	DisplayName      *string         `json:"displayName"`
-	ClaimedBy        *string         `json:"claimedBy"`
-	QueuePosition    *int            `json:"queuePosition"`
-	AcceptedAt       *string         `json:"acceptedAt,omitempty"`
-	EndedAt          *string         `json:"endedAt,omitempty"`
-	LiveKitURL       string          `json:"livekitUrl"`
-	Checklist        []checklistBody `json:"checklist"`
-	CaptureGuide     *string         `json:"captureGuide"`
-	MaPrompt         *promptBody     `json:"maPrompt"`
-	MaAnswers        []answerBody    `json:"maAnswers"`
-	DigitChallenge   *digitBody      `json:"digitChallenge"`
-	DigitResponse    *string         `json:"digitResponse"`
-	DigitRespondedAt *string         `json:"digitRespondedAt"`
-	MaMatch          *bool           `json:"maMatch"`
-	DigitMatch       *bool           `json:"digitMatch"`
-	Captures         []captureBody   `json:"captures"`
+	ID                  string          `json:"id"`
+	JoinURL             string          `json:"joinUrl"`
+	JoinToken           string          `json:"joinToken"`
+	Status              string          `json:"status"`
+	RoomName            string          `json:"roomName"`
+	CreatedAt           string          `json:"createdAt"`
+	CreatedBy           string          `json:"createdBy"`
+	DisplayName         *string         `json:"displayName"`
+	ClaimedBy           *string         `json:"claimedBy"`
+	QueuePosition       *int            `json:"queuePosition"`
+	AcceptedAt          *string         `json:"acceptedAt,omitempty"`
+	EndedAt             *string         `json:"endedAt,omitempty"`
+	LiveKitURL          string          `json:"livekitUrl"`
+	Checklist           []checklistBody `json:"checklist"`
+	CaptureGuide        *string         `json:"captureGuide"`
+	MaPrompt            *promptBody     `json:"maPrompt"`
+	MaAnswers           []answerBody    `json:"maAnswers"`
+	DigitChallenge      *digitBody      `json:"digitChallenge"`
+	DigitResponse       *string         `json:"digitResponse"`
+	DigitRespondedAt    *string         `json:"digitRespondedAt"`
+	MaMatch             *bool           `json:"maMatch"`
+	DigitMatch          *bool           `json:"digitMatch"`
+	Captures            []captureBody   `json:"captures"`
+	AcwNotes            string          `json:"acwNotes"`
+	Disposition         *string         `json:"disposition"`
+	RecordingURL        *string         `json:"recordingUrl"`
+	RecordingID         *string         `json:"recordingId"`
+	RecordingAttachedAt *string         `json:"recordingAttachedAt"`
 }
 
 type claimBody struct {

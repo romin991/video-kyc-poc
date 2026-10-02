@@ -31,6 +31,7 @@ func main() {
 	} else {
 		log.Print("LIVEKIT_API_KEY or LIVEKIT_API_SECRET is unset. Sessions still accept and join; media stays off.")
 	}
+	log.Print(httpapi.StubSummary(cfg))
 
 	log.Fatal(server.ListenAndServe())
 }
