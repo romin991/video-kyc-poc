@@ -78,10 +78,12 @@ The same token is reused for a role and room until it is close to expiry, so the
 
 If `LIVEKIT_API_KEY` or `LIVEKIT_API_SECRET` is missing, accept and join return `lk-stub-…` and do not throw. If `VITE_LIVEKIT_URL` is missing, the browser skips `Room.connect`. Either way the session shell still creates, accepts, joins, and ends.
 
+The Go + Next rewrite’s media slice uses the same room, grants, and teardown. `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` feed the Go minter. Next builds read `NEXT_PUBLIC_LIVEKIT_URL` (the same WebSocket URL). See [docs/wave-r1-livekit.md](docs/wave-r1-livekit.md). The Express and Vite apps on this branch remain the reference implementation.
+
 ## Signaling
 
 | Method | Path | Result |
-| --- | --- | --- |
+| --- | --- |
 | `POST` | `/sessions` | session, including stub `onboardingPayload` unless the body overrides it |
 | `GET` | `/sessions?status=waiting` | waiting queue, oldest first |
 | `GET` | `/sessions/:id` | one session, including checklist, notes, disposition, `captures[]`, and recording fields |
