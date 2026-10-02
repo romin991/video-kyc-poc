@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { connectRoom, type ConnectHandle } from "./connectRoom";
+import { connectRoom } from "./connectRoom";
 
 export type CallPhase = "idle" | "stub" | "connecting" | "connected" | "error";
 
@@ -29,8 +29,9 @@ const MISSING_URL = "LIVEKIT_URL is empty, so Room.connect is skipped. The call 
  * and subscribes to the remote participant. Stub tokens and a missing URL
  * leave the shell up.
  *
- * Cleanup is End: the call stage unmounts, this effect aborts an in-flight
- * connect, disconnects the room, and stops local tracks.
+ * Cleanup is End: the call stage unmounts, this effect aborts, and the room
+ * disconnects and stops local tracks. A Strict Mode remount aborts the first
+ * effect before it connects, so only one Room joins per participant.
  */
 export function useCallMedia(input: CallMediaInput): CallMedia {
   const serverUrl = input.serverUrl?.trim() || "";
@@ -52,30 +53,33 @@ export function useCallMedia(input: CallMediaInput): CallMedia {
     }
 
     const abort = new AbortController();
-    let handle: ConnectHandle | null = null;
     setPhase("connecting");
     setError(null);
 
-    connectRoom({ serverUrl, token, roomName, signal: abort.signal })
+    connectRoom({
+      serverUrl,
+      token,
+      roomName,
+      signal: abort.signal,
+      onUnexpectedDisconnect: (reason) => {
+        if (abort.signal.aborted) return;
+        setPhase("error");
+        setError(`LiveKit disconnected (${reason}).`);
+      },
+    })
       .then((next) => {
-        if (abort.signal.aborted) {
-          void next.disconnect();
-          return;
-        }
-        handle = next;
+        if (abort.signal.aborted) return;
         setPhase("connected");
         setError(next.publishError);
       })
       .catch((err: unknown) => {
         if (abort.signal.aborted) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
         setPhase("error");
         setError(err instanceof Error ? err.message : "LiveKit connect failed");
       });
 
     return () => {
       abort.abort();
-      void handle?.disconnect();
     };
   }, [serverUrl, token, roomName]);
 

@@ -1,13 +1,15 @@
 import type { RemoteTrack, Room } from "livekit-client";
-import { attachRemote, publishLocalAv, releaseLiveKitRoom, type StoppableTrack } from "./mediaSession";
+import type { StoppableTrack } from "./mediaSession";
+import { createSessionGate, startMediaSession, type MediaRoom } from "./roomSession";
 
 export interface ConnectInput {
   serverUrl: string;
   token: string;
   /** Already `vkyc-${sessionId}`, matching the room claim inside the Go JWT. */
   roomName: string;
-  /** Set when End unmounts the call before connect finishes. */
-  signal?: AbortSignal;
+  /** Aborted on End or unmount. Disconnects and stops local tracks. */
+  signal: AbortSignal;
+  onUnexpectedDisconnect?: (reason: string) => void;
 }
 
 export interface ConnectHandle {
@@ -18,99 +20,117 @@ export interface ConnectHandle {
   disconnect(): Promise<void>;
 }
 
+/** One gate per page, so a remount never overlaps the previous Room. */
+const pageGate = createSessionGate();
+
 /**
  * Single LiveKit connect point for both Next.js shells.
  *
  * Room.connect, then getUserMedia({ audio: true, video: true }) and
  * publishTrack for the microphone and camera. Remote camera and microphone
  * tracks attach to [data-livekit="remote"]. The local camera attaches to
- * [data-livekit="local"] and stays muted.
- *
- * disconnect() unpublishes, unsubscribes, stops local tracks (including a
- * getUserMedia that has not finished publishing), and leaves the room.
- * Stub tokens never reach this function.
+ * [data-livekit="local"] and stays muted. Aborting `signal` disconnects,
+ * unpublishes, and stops local tracks. Stub tokens never reach this function.
  */
 export async function connectRoom(input: ConnectInput): Promise<ConnectHandle> {
-  const { Room, RoomEvent, Track } = await import("livekit-client");
-  const room = new Room();
-  const ownedTracks: MediaStreamTrack[] = [];
-  let released = false;
-
-  const onSubscribed = (track: RemoteTrack) => {
-    if (released || track.source === Track.Source.ScreenShare) return;
-    attachRemote(asStoppable(track));
+  let liveRoom: Room | null = null;
+  const session = await startMediaSession(input, {
+    gate: pageGate,
+    devices: navigator.mediaDevices,
+    createRoom: async () => {
+      const livekit = await import("livekit-client");
+      liveRoom = new livekit.Room();
+      return adaptRoom(liveRoom, livekit);
+    },
+  });
+  return {
+    room: liveRoom as unknown as Room,
+    publishError: session.publishError,
+    disconnect: session.disconnect,
   };
-
-  const release = async () => {
-    if (released) return;
-    released = true;
-    room.off(RoomEvent.TrackSubscribed, onSubscribed);
-    await releaseLiveKitRoom(
-      {
-        localParticipant: {
-          trackPublications: room.localParticipant.trackPublications,
-          unpublishTrack: (track, stopOnUnpublish) =>
-            room.localParticipant.unpublishTrack(track as never, stopOnUnpublish),
-        },
-        remoteParticipants: room.remoteParticipants,
-        disconnect: (stopTracks) => room.disconnect(stopTracks),
-        removeAllListeners: () => {
-          room.removeAllListeners();
-        },
-      },
-      ownedTracks,
-    );
-  };
-
-  const throwIfAborted = async () => {
-    if (!input.signal?.aborted) return;
-    await release();
-    throw new DOMException("The call ended before media connected.", "AbortError");
-  };
-
-  try {
-    console.info(`[vkyc] Room.connect ${input.roomName}`);
-    await room.connect(input.serverUrl, input.token);
-    await throwIfAborted();
-    room.on(RoomEvent.TrackSubscribed, onSubscribed);
-
-    let publishError: string | null = null;
-    try {
-      await publishLocalAv({
-        publisher: {
-          publishTrack: async (mediaTrack, options) => {
-            const publication = await room.localParticipant.publishTrack(mediaTrack as MediaStreamTrack, {
-              source: options.source === "camera" ? Track.Source.Camera : Track.Source.Microphone,
-              name: options.name,
-            });
-            return { track: publication.track ? asStoppable(publication.track) : undefined };
-          },
-        },
-        ownedTracks,
-        isCancelled: () => released || input.signal?.aborted === true,
-        devices: navigator.mediaDevices,
-      });
-    } catch (error) {
-      publishError = error instanceof Error ? error.message : "Camera and microphone publish failed";
-      console.error("[vkyc] local A/V publish failed", error);
-    }
-
-    await throwIfAborted();
-    room.remoteParticipants.forEach((participant) => {
-      participant.trackPublications.forEach((publication) => {
-        if (!publication.track || publication.source === Track.Source.ScreenShare) return;
-        attachRemote(asStoppable(publication.track));
-      });
-    });
-
-    return { room, publishError, disconnect: release };
-  } catch (error) {
-    await release();
-    throw error;
-  }
 }
 
-function asStoppable(track: {
+function adaptRoom(room: Room, livekit: typeof import("livekit-client")): MediaRoom {
+  const { ConnectionState, RoomEvent, Track, DisconnectReason } = livekit;
+  const isCallTrack = (track: RemoteTrack | undefined): track is RemoteTrack =>
+    Boolean(track) && track!.source !== Track.Source.ScreenShare;
+
+  return {
+    localParticipant: {
+      trackPublications: room.localParticipant.trackPublications,
+      unpublishTrack: (track, stopOnUnpublish) => room.localParticipant.unpublishTrack(track as never, stopOnUnpublish),
+    },
+    remoteParticipants: room.remoteParticipants,
+    disconnect: (stopTracks) => room.disconnect(stopTracks),
+    removeAllListeners: () => {
+      room.removeAllListeners();
+    },
+    connect: (serverUrl, token) => room.connect(serverUrl, token),
+    async publish(track, source, name) {
+      const publication = await room.localParticipant.publishTrack(track as MediaStreamTrack, {
+        source: source === "camera" ? Track.Source.Camera : Track.Source.Microphone,
+        name,
+      });
+      return { track: publication.track ? toStoppable(publication.track) : undefined };
+    },
+    remoteTracks() {
+      const tracks: StoppableTrack[] = [];
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((publication) => {
+          if (isCallTrack(publication.track)) tracks.push(toStoppable(publication.track));
+        });
+      });
+      return tracks;
+    },
+    onRemoteTrack(listener) {
+      const handler = (track: RemoteTrack) => {
+        if (isCallTrack(track)) listener(toStoppable(track));
+      };
+      room.on(RoomEvent.TrackSubscribed, handler);
+      return () => {
+        room.off(RoomEvent.TrackSubscribed, handler);
+      };
+    },
+    onDisconnected(listener) {
+      const handler = (reason?: number) => {
+        listener(reason === undefined ? "unknown" : (DisconnectReason[reason] ?? String(reason)));
+      };
+      room.on(RoomEvent.Disconnected, handler);
+      return () => {
+        room.off(RoomEvent.Disconnected, handler);
+      };
+    },
+    whenConnected(signal) {
+      return new Promise<void>((resolve, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException("The call ended.", "AbortError"));
+          return;
+        }
+        if (room.state === ConnectionState.Connected) {
+          resolve();
+          return;
+        }
+        const cleanup = () => {
+          room.off(RoomEvent.ConnectionStateChanged, onState);
+          signal.removeEventListener("abort", onAbort);
+        };
+        const onState = (state: (typeof ConnectionState)[keyof typeof ConnectionState]) => {
+          if (state !== ConnectionState.Connected) return;
+          cleanup();
+          resolve();
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException("The call ended.", "AbortError"));
+        };
+        room.on(RoomEvent.ConnectionStateChanged, onState);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  };
+}
+
+function toStoppable(track: {
   stop: () => void;
   detach: () => HTMLMediaElement[];
   attach: (element: HTMLMediaElement) => HTMLMediaElement;

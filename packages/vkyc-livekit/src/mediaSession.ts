@@ -67,11 +67,28 @@ export const NO_MEDIA_INPUTS =
 const LOCAL_VIDEO = '[data-livekit="local"]';
 const REMOTE_VIDEO = '[data-livekit="remote"]';
 
+export interface PublishRetry {
+  /** Total tries per track, including the first. */
+  attempts: number;
+  /** Resolves when the room can take another publish. Rejects if the call ended. */
+  beforeRetry(attempt: number, error: unknown): Promise<void>;
+}
+
+/**
+ * Captures once and publishes the microphone, then the camera.
+ *
+ * A publish can be rejected while the room is still up: livekit-client
+ * rejects in-flight publishes with "Cancelled publication by calling
+ * unpublish" when it fully reconnects the signal connection. With `retry`, those tracks stay
+ * live and are published again after the room reconnects. Tracks are stopped
+ * only when the call ends or every retry fails.
+ */
 export async function publishLocalAv(input: {
   publisher: TrackPublisher;
   ownedTracks: StoppableTrack[];
   isCancelled: () => boolean;
   devices: MediaDeviceSource;
+  retry?: PublishRetry;
 }): Promise<void> {
   const listed = await input.devices.enumerateDevices();
   if (input.isCancelled()) return;
@@ -86,20 +103,26 @@ export async function publishLocalAv(input: {
     return;
   }
 
+  const publish = async (track: StoppableTrack, source: "microphone" | "camera") => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await input.publisher.publishTrack(track, { source, name: track.label || source });
+      } catch (error) {
+        if (input.isCancelled() || !input.retry || attempt >= input.retry.attempts) throw error;
+        await input.retry.beforeRetry(attempt, error);
+        if (input.isCancelled()) throw error;
+      }
+    }
+  };
+
   try {
     for (const mediaTrack of stream.getAudioTracks()) {
       if (input.isCancelled()) break;
-      await input.publisher.publishTrack(mediaTrack, {
-        source: "microphone",
-        name: mediaTrack.label || "microphone",
-      });
+      await publish(mediaTrack, "microphone");
     }
     for (const mediaTrack of stream.getVideoTracks()) {
       if (input.isCancelled()) break;
-      const publication = await input.publisher.publishTrack(mediaTrack, {
-        source: "camera",
-        name: mediaTrack.label || "camera",
-      });
+      const publication = await publish(mediaTrack, "camera");
       if (publication.track && !input.isCancelled()) attachLocal(publication.track);
     }
   } catch (error) {
