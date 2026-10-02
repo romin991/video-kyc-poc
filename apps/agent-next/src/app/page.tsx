@@ -84,10 +84,7 @@ function CallStage({
     <section className="panel" data-call="active" data-status="in_call" data-room-name={call.roomName} data-call-phase={media.phase}>
       <div className="call-head">
         <div>
-          <div className="queue-lead">
-            <StatusPill status="in_call" />
-            <p className="eyebrow">In call</p>
-          </div>
+          <StatusPill status="in_call" />
           <h2>{label}</h2>
           <p className="meta">Room {call.roomName}</p>
         </div>
