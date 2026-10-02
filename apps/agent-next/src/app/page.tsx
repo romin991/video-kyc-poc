@@ -30,6 +30,26 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+function statusLabel(status: Session["status"]): string {
+  if (status === "in_call") return "In call";
+  if (status === "ended") return "Ended";
+  return "Waiting";
+}
+
+function sessionLabel(session: { id: string; displayName: string | null }): string {
+  const name = session.displayName?.trim();
+  if (name) return name;
+  return `Session ${shortId(session.id)}`;
+}
+
+function StatusPill({ status }: { status: Session["status"] }) {
+  return (
+    <span className={`pill pill-${status}`} data-status={status}>
+      {statusLabel(status)}
+    </span>
+  );
+}
+
 function VideoTile({ label, slot }: { label: string; slot: "local" | "remote" }) {
   return (
     <section className={`tile tile-${slot}`} aria-label={label}>
@@ -42,7 +62,17 @@ function VideoTile({ label, slot }: { label: string; slot: "local" | "remote" })
   );
 }
 
-function CallStage({ call, onEnd, busy }: { call: ClaimResult; onEnd: () => void; busy: boolean }) {
+function CallStage({
+  call,
+  label,
+  onEnd,
+  busy,
+}: {
+  call: ClaimResult;
+  label: string;
+  onEnd: () => void;
+  busy: boolean;
+}) {
   const serverUrl = serverUrlFor(call.livekitUrl);
   const media = useCallMedia({
     serverUrl: serverUrl || null,
@@ -51,11 +81,11 @@ function CallStage({ call, onEnd, busy }: { call: ClaimResult; onEnd: () => void
   });
 
   return (
-    <section className="panel" data-call="active" data-room-name={call.roomName} data-call-phase={media.phase}>
+    <section className="panel" data-call="active" data-status="in_call" data-room-name={call.roomName} data-call-phase={media.phase}>
       <div className="call-head">
         <div>
-          <p className="eyebrow">In call</p>
-          <h2>Session {shortId(call.sessionId)}</h2>
+          <StatusPill status="in_call" />
+          <h2>{label}</h2>
           <p className="meta">Room {call.roomName}</p>
         </div>
         <button type="button" className="danger" data-action="end" disabled={busy} onClick={onEnd}>
@@ -134,6 +164,7 @@ export default function DeskPage() {
   const waiting = sessions
     .filter((session) => session.status === "waiting")
     .sort((a, b) => (a.queuePosition ?? 99) - (b.queuePosition ?? 99));
+  const ended = sessions.filter((session) => session.status === "ended").slice(0, 6);
 
   async function run(key: string, work: () => Promise<void>) {
     setBusy(key);
@@ -178,6 +209,12 @@ export default function DeskPage() {
         <>
         <CallStage
           call={call}
+          label={sessionLabel(
+            sessions.find((session) => session.id === call.sessionId) ?? {
+              id: call.sessionId,
+              displayName: null,
+            },
+          )}
           busy={busy === "end"}
           onEnd={() =>
             void run("end", async () => {
@@ -190,89 +227,121 @@ export default function DeskPage() {
         />
         <KycDesk sessionId={call.sessionId} agentName={agent} />
         </>
-      ) : (
-        <div className="actions">
-          <button
-            type="button"
-            className="primary"
-            data-action="create"
-            disabled={busy !== null}
-            onClick={() =>
-              void run("create", async () => {
-                const created = await createSession(agent);
-                setNotice(`Session ${shortId(created.id)} is waiting.`);
-                await refresh();
-              })
-            }
-          >
-            {busy === "create" ? "Creating…" : "Create session"}
-          </button>
-          <button
-            type="button"
-            className="ghost"
-            data-action="claim-next"
-            disabled={busy !== null || waiting.length === 0}
-            onClick={() =>
-              void run("claim", async () => {
-                const claimed = await claimNextSession(agent);
-                setCall(claimed);
-                setNotice(null);
-                await refresh();
-              })
-            }
-          >
-            {busy === "claim" ? "Claiming…" : "Claim next"}
-          </button>
-        </div>
-      )}
+      ) : null}
 
-      <section className="panel">
-        <h2>Waiting</h2>
-        {waiting.length === 0 ? <p className="meta">No session is waiting.</p> : null}
-        <div className="rows">
-          {waiting.map((session) => (
-            <article className="row" key={session.id} data-session-id={session.id}>
-              <div>
-                <strong>#{session.queuePosition ?? "–"} · {shortId(session.id)}</strong>
-                <p className="meta">Created by {session.createdBy}</p>
-                <a className="link" href={session.joinUrl} data-join-url={session.joinUrl}>
-                  {session.joinUrl}
-                </a>
-              </div>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="ghost"
-                  data-action="copy"
-                  onClick={() =>
-                    void navigator.clipboard.writeText(session.joinUrl).then(
-                      () => setCopied(session.id),
-                      () => setCopied(null),
-                    )
-                  }
-                >
-                  {copied === session.id ? "Copied" : "Copy link"}
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  data-action="accept"
-                  disabled={busy !== null || call !== null}
-                  onClick={() =>
-                    void run(`accept:${session.id}`, async () => {
-                      const claimed = await acceptSession(session.id, agent);
-                      setCall(claimed);
-                      setNotice(null);
-                      await refresh();
-                    })
-                  }
-                >
-                  {busy === `accept:${session.id}` ? "Accepting…" : "Accept"}
-                </button>
-              </div>
-            </article>
-          ))}
+      <section className="panel" aria-labelledby="queue-heading">
+        <div className="panel-head">
+          <h2 id="queue-heading">Waiting queue</h2>
+          <div className="actions">
+            <span className="count" data-queue-count={waiting.length}>
+              {waiting.length} waiting
+            </span>
+            <button
+              type="button"
+              className="primary"
+              data-action="create"
+              disabled={busy !== null}
+              onClick={() =>
+                void run("create", async () => {
+                  const created = await createSession(agent);
+                  setNotice(`${sessionLabel(created)} is waiting.`);
+                  await refresh();
+                })
+              }
+            >
+              {busy === "create" ? "Creating…" : "Create session"}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              data-action="claim-next"
+              disabled={busy !== null || call !== null || waiting.length === 0}
+              onClick={() =>
+                void run("claim", async () => {
+                  const claimed = await claimNextSession(agent);
+                  setCall(claimed);
+                  setNotice(null);
+                  await refresh();
+                })
+              }
+            >
+              {busy === "claim" ? "Claiming…" : "Claim next"}
+            </button>
+          </div>
         </div>
+        <p className="meta queue-note">
+          New sessions wait here. Claim takes one into the call. Everyone else stays in the queue.
+        </p>
+        {waiting.length === 0 ? (
+          <p className="meta">No one is waiting. A new session shows up here within a couple of seconds.</p>
+        ) : (
+          <ul className="queue" data-queue="waiting">
+            {waiting.map((session) => (
+              <li className="row" key={session.id} data-session-id={session.id} data-status="waiting">
+                <div>
+                  <div className="queue-lead">
+                    <span className="queue-pos">#{session.queuePosition ?? "–"}</span>
+                    <StatusPill status="waiting" />
+                    <strong data-display-name={session.displayName ?? ""}>{sessionLabel(session)}</strong>
+                  </div>
+                  <p className="meta">
+                    {shortId(session.id)} · {session.createdBy}
+                  </p>
+                  <a className="link" href={session.joinUrl} data-join-url={session.joinUrl}>
+                    {session.joinUrl}
+                  </a>
+                </div>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    data-action="copy"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(session.joinUrl).then(
+                        () => setCopied(session.id),
+                        () => setCopied(null),
+                      )
+                    }
+                  >
+                    {copied === session.id ? "Copied" : "Copy link"}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    data-action="accept"
+                    disabled={busy !== null || call !== null}
+                    onClick={() =>
+                      void run(`accept:${session.id}`, async () => {
+                        const claimed = await acceptSession(session.id, agent);
+                        setCall(claimed);
+                        setNotice(null);
+                        await refresh();
+                      })
+                    }
+                  >
+                    {busy === `accept:${session.id}` ? "Claiming…" : "Claim"}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {ended.length > 0 ? (
+          <div className="ended-list">
+            <h3>Ended</h3>
+            <ul className="queue" data-queue="ended">
+              {ended.map((session) => (
+                <li className="row" key={session.id} data-session-id={session.id} data-status="ended">
+                  <div className="queue-lead">
+                    <StatusPill status="ended" />
+                    <strong>{sessionLabel(session)}</strong>
+                    <span className="meta">{shortId(session.id)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </section>
     </main>
   );

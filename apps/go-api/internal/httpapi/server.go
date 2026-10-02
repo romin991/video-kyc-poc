@@ -97,11 +97,12 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
-	if err := discardJSON(w, r); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "Invalid JSON body")
+	displayName, err := readDisplayName(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	created := s.store.Create(demoAgent(r), s.now())
+	created := s.store.Create(demoAgent(r), displayName, s.now())
 	writeJSON(w, http.StatusCreated, s.sessionJSON(r, created))
 }
 
@@ -196,6 +197,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		CustomerToken:  s.minter.ParticipantToken("customer", item.RoomName),
 		Status:         string(item.Status),
 		QueuePosition:  positionPtr(s.store.QueuePosition(item.ID)),
+		DisplayName:    nilIfEmpty(item.DisplayName),
 		LiveKitURL:     s.livekitURL,
 		CaptureGuide:   kindString(item.CaptureGuide),
 		MaPrompt:       promptJSON(item.MaPrompt),
@@ -212,6 +214,7 @@ func (s *Server) sessionJSON(r *http.Request, item *session.Session) sessionBody
 		RoomName:         item.RoomName,
 		CreatedAt:        formatTime(item.CreatedAt),
 		CreatedBy:        item.CreatedBy,
+		DisplayName:      nilIfEmpty(item.DisplayName),
 		ClaimedBy:        nilIfEmpty(item.ClaimedBy),
 		QueuePosition:    positionPtr(s.store.QueuePosition(item.ID)),
 		LiveKitURL:       s.livekitURL,
@@ -257,6 +260,7 @@ type sessionBody struct {
 	RoomName         string          `json:"roomName"`
 	CreatedAt        string          `json:"createdAt"`
 	CreatedBy        string          `json:"createdBy"`
+	DisplayName      *string         `json:"displayName"`
 	ClaimedBy        *string         `json:"claimedBy"`
 	QueuePosition    *int            `json:"queuePosition"`
 	AcceptedAt       *string         `json:"acceptedAt,omitempty"`
@@ -290,6 +294,7 @@ type joinBody struct {
 	CustomerToken  string      `json:"customerToken"`
 	Status         string      `json:"status"`
 	QueuePosition  *int        `json:"queuePosition"`
+	DisplayName    *string     `json:"displayName"`
 	LiveKitURL     string      `json:"livekitUrl"`
 	CaptureGuide   *string     `json:"captureGuide"`
 	MaPrompt       *promptBody `json:"maPrompt"`
@@ -326,21 +331,73 @@ func demoAgent(r *http.Request) string {
 	return raw
 }
 
-// discardJSON accepts an empty body or one JSON value. The P0 create call
-// does not read onboarding fields; those stay on the Express reference.
-func discardJSON(w http.ResponseWriter, r *http.Request) error {
+// readDisplayName reads the queue label from POST /sessions.
+// An empty body, or any JSON value that is not an object, creates a session
+// with no label. displayName wins; fullName is the same label under the name
+// the customer home sends. Phone, product, and the rest of onboarding stay
+// off this API.
+func readDisplayName(w http.ResponseWriter, r *http.Request) (string, error) {
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
 	dec := json.NewDecoder(r.Body)
 	var raw json.RawMessage
 	if err := dec.Decode(&raw); err != nil {
 		if err == io.EOF {
-			return nil
+			return "", nil
 		}
-		return err
+		return "", errInvalidJSON
 	}
-	return nil
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return "", nil
+	}
+	displayName, hasDisplay, err := stringField(fields, "displayName")
+	if err != nil {
+		return "", errDisplayName
+	}
+	fullName, _, err := stringField(fields, "fullName")
+	if err != nil {
+		return "", errDisplayName
+	}
+	chosen := fullName
+	if hasDisplay {
+		chosen = displayName
+	}
+	cleaned := cleanLabel(chosen)
+	if len([]rune(cleaned)) > 120 {
+		return "", errDisplayName
+	}
+	return cleaned, nil
 }
+
+func stringField(fields map[string]json.RawMessage, key string) (string, bool, error) {
+	raw, ok := fields[key]
+	if !ok || string(raw) == "null" {
+		return "", false, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", true, err
+	}
+	return value, true, nil
+}
+
+func cleanLabel(raw string) string {
+	raw = strings.ReplaceAll(strings.ReplaceAll(raw, "\r", " "), "\n", " ")
+	return strings.Join(strings.Fields(raw), " ")
+}
+
+var (
+	errInvalidJSON = errString("Invalid JSON body")
+	errDisplayName = errString("displayName must be a string of 120 characters or fewer")
+)
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"error": code, "message": message})

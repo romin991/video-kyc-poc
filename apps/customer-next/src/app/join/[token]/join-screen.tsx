@@ -92,7 +92,7 @@ function InCall({ info, token, onEnded }: { info: JoinInfo; token: string; onEnd
   }, [maPrompt, digitChallenge]);
 
   return (
-    <div className="call" data-call="active" data-room-name={info.roomName} data-call-phase={media.phase}>
+      <div className="call" data-call="active" data-status="in_call" data-room-name={info.roomName} data-call-phase={media.phase}>
       <div className="call-head">
         <div>
           <p className="eyebrow">In call</p>
@@ -288,10 +288,11 @@ export function JoinScreen({ token }: { token: string }) {
       <div className="stack" data-status="waiting">
         <span className="pulse" aria-hidden="true" />
         <h1>Waiting for an agent</h1>
+        {info.displayName ? <p data-display-name={info.displayName}>{info.displayName}</p> : null}
         <p>
           {place
-            ? `You are ${place} in line. Keep this window open. The call starts when an agent accepts you.`
-            : "Keep this window open. The call starts when an agent accepts you."}
+            ? `You are ${place} in line. Keep this window open. The call starts when an agent claims you.`
+            : "Keep this window open. The call starts when an agent claims you."}
         </p>
         <p className="mono">Session {info.sessionId.slice(0, 8)}</p>
         {problem ? <p className="problem">{problem} Retrying…</p> : null}

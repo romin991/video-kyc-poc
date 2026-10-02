@@ -2,7 +2,7 @@
 
 ## Company stack (R1) — product path
 
-Go API and two Next.js App Router shells. Session create, join-by-token, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Recording, after-call disposition, CRM and datalake stubs, and workforce management stay on that reference.
+Go API and two Next.js App Router shells. Session create, join-by-token, the waiting queue, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Recording, after-call disposition, CRM and datalake stubs, and workforce management beyond a single claim stay on that reference.
 
 Requires Go 1.23+ and Node.js 20+.
 
@@ -44,11 +44,11 @@ pnpm dev:customer-next
 
 The API listens on `127.0.0.1` only and keeps sessions in memory. It reads a repo-root `.env` without overriding variables already set in the shell. `CUSTOMER_APP_ORIGIN` in `.env.example` points at the Vite reference app; export `http://127.0.0.1:3002` before `go run` so join links open the Next.js customer app.
 
-1. Open the agent desk. **Create session**. Copy the customer join link (`http://127.0.0.1:3002/join/<token>`).
-2. Open that link. The page says **Waiting for an agent**.
-3. On the desk, **Accept** that row, or **Claim next** for the oldest waiting session. A second waiting session stays in the list.
-4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder.
-5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The other side shows **Session ended** on its next poll.
+1. Open the agent desk and the customer app. **Create session** on the desk, or **Enter the queue** on the customer app (the name is optional). Do that twice. Both rows show under **Waiting queue** as **Waiting**, oldest first.
+2. Open a join link (`http://127.0.0.1:3002/join/<token>`). The page says **Waiting for an agent** and the place in line. An unclaimed customer stays there.
+3. On the desk, **Claim** one row, or **Claim next** for the oldest waiting session. That session opens the existing call and the manual-auth desk. The other row stays **Waiting**. Further claims stay disabled until **End session**.
+4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder. The checklist, questions, digits, and stills on that desk are unchanged.
+5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The customer shows **Session ended** on its next poll. The desk lists that session under **Ended**. The other session is still **Waiting**.
 
 ### HTTP flow
 
@@ -68,13 +68,13 @@ curl -s -X POST http://127.0.0.1:3001/sessions/$ID/end
 curl -s http://127.0.0.1:3001/join/$TOKEN
 ```
 
-`POST /sessions` returns `status: "waiting"` and does not include `agentToken` or `customerToken`. `roomName` is `vkyc-${sessionId}`. `GET /join/:token` returns `customerToken`. `POST /sessions/:id/accept` and `POST /sessions/claim` return `agentToken`, `roomName`, and `status: "in_call"`. A second accept is `409`. An empty claim is `409`. End is idempotent and returns `{ "status": "ended", "sessionId" }`. `X-Demo-Agent` is stored as `createdBy` on create and `claimedBy` on claim or accept.
+`POST /sessions` returns `status: "waiting"` and does not include `agentToken` or `customerToken`. `roomName` is `vkyc-${sessionId}`. An optional `displayName` (or `fullName`, the same label) is the queue name, 120 characters max. A blank name is stored as `null`. `GET /join/:token` returns `customerToken`. `POST /sessions/:id/accept` and `POST /sessions/claim` return `agentToken`, `roomName`, and `status: "in_call"`. A second accept is `409`. An empty claim is `409`. End is idempotent and returns `{ "status": "ended", "sessionId" }`. `X-Demo-Agent` is stored as `createdBy` on create and `claimedBy` on claim or accept.
 
 When `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, those tokens are LiveKit JWTs from `github.com/livekit/protocol/auth` (the Go equivalent of `livekit-server-sdk`): identity `agent` or `customer`, `roomJoin`, `canPublish`, `canSubscribe`, room `vkyc-${sessionId}`, TTL 10 minutes, reused until a minute before expiry. Otherwise the token is `lk-stub-<role>-<room>` and accept/join still succeed. `livekitUrl` on the JSON body is `LIVEKIT_URL`.
 
 | Method | Path | Result |
 | --- | --- |
-| `POST` | `/sessions` | waiting session, join URL |
+| `POST` | `/sessions` | waiting session, join URL, optional `displayName` |
 | `GET` | `/sessions?status=waiting` | waiting sessions, oldest first |
 | `GET` | `/sessions/:id` | one session |
 | `POST` | `/sessions/claim` | oldest waiting session → in call |
@@ -177,11 +177,34 @@ pnpm --filter @vkyc/agent-next --filter @vkyc/customer-next --filter @vkyc/livek
 ### Layout
 
 ```
-apps/go-api            Go session API, in-memory store, LiveKit JWT mint, manual auth, stills
-apps/agent-next        Next.js agent desk (create, claim, accept, prompts, captures, end)
-apps/customer-next     Next.js customer join (token link, prompts, ID guide, end)
+apps/go-api            Go session API, in-memory store, LiveKit JWT mint, waiting queue, manual auth, stills
+apps/agent-next        Next.js agent desk (queue, claim, prompts, captures, end)
+apps/customer-next     Next.js customer join (enter queue, token link, prompts, ID guide, end)
 packages/vkyc-livekit  livekit-client connect hook shared by both shells
 ```
+
+## R3 waiting queue
+
+Inbound sessions wait until an agent claims exactly one of them. Claim and accept open the existing call and the manual-auth desk (questions, digits, checklist, stills). Ending a session does not touch the rest of the queue. Statuses on this desk are **Waiting**, **In call**, and **Ended**. There is no Approve, Reject, UTV, recording, CRM, or Escalate.
+
+A customer enters from the customer app (**Enter the queue**), or the desk **Create session** does the same thing. Neither path starts the call. While the desk is in a call, **Claim** and **Claim next** stay disabled, and every other waiting session remains in the list.
+
+```bash
+export CUSTOMER_APP_ORIGIN=http://127.0.0.1:3002
+# Go API already running on 127.0.0.1:3001
+
+curl -s -X POST http://127.0.0.1:3001/sessions \
+  -H 'content-type: application/json' -H 'x-demo-agent: Customer' \
+  -d '{"displayName":"Ayu"}'
+curl -s -X POST http://127.0.0.1:3001/sessions \
+  -H 'content-type: application/json' -H 'x-demo-agent: Customer' \
+  -d '{"displayName":"Budi"}'
+curl -s http://127.0.0.1:3001/sessions?status=waiting
+curl -s -X POST http://127.0.0.1:3001/sessions/claim -H 'x-demo-agent: Desk 1'
+curl -s http://127.0.0.1:3001/sessions?status=waiting
+```
+
+The first curl pair leaves two `waiting` sessions, oldest first, with `queuePosition` 1 and 2. Claim moves Ayu to `in_call` and returns `agentToken`. The waiting list is then only Budi, at position 1. A second accept of Ayu is `409`. `GET /join/<budi token>` stays `waiting`.
 
 ## Reference stack (Express + Vite)
 
