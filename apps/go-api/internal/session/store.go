@@ -24,43 +24,50 @@ const (
 // Manual-auth answers, the digit prompt, the checklist, and stills sit on the
 // same record as the call. Image bytes live beside it, keyed by capture id.
 type Session struct {
-	ID               string
-	JoinToken        string
-	Status           Status
-	RoomName         string
-	CreatedAt        time.Time
-	CreatedBy        string
-	DisplayName      string
-	ClaimedBy        string
-	AcceptedAt       time.Time
-	EndedAt          time.Time
-	Checklist        []ChecklistItem
-	CaptureGuide     *CaptureKind
-	MaPrompt         *MaPrompt
-	MaAnswers        []MaAnswer
-	DigitChallenge   *DigitChallenge
-	DigitResponse    *string
-	DigitRespondedAt time.Time
-	MaMatch          *bool
-	DigitMatch       *bool
-	Captures         []Capture
-	arrival          int
+	ID                  string
+	JoinToken           string
+	Status              Status
+	RoomName            string
+	CreatedAt           time.Time
+	CreatedBy           string
+	DisplayName         string
+	ClaimedBy           string
+	AcceptedAt          time.Time
+	EndedAt             time.Time
+	Checklist           []ChecklistItem
+	CaptureGuide        *CaptureKind
+	MaPrompt            *MaPrompt
+	MaAnswers           []MaAnswer
+	DigitChallenge      *DigitChallenge
+	DigitResponse       *string
+	DigitRespondedAt    time.Time
+	MaMatch             *bool
+	DigitMatch          *bool
+	Captures            []Capture
+	AcwNotes            string
+	Disposition         string
+	RecordingURL        string
+	RecordingID         string
+	RecordingAttachedAt time.Time
+	arrival             int
 }
 
 // Store is safe for concurrent HTTP handlers.
 type Store struct {
-	mu       sync.Mutex
-	sessions map[string]*Session
-	byToken  map[string]string
-	blobs    map[string][]byte
-	arrival  int
+	mu         sync.Mutex
+	sessions   map[string]*Session
+	byToken    map[string]string
+	blobs      map[string][]byte
+	recordings map[string]localRecording
+	arrival    int
 }
 
 func NewStore() *Store {
 	return &Store{
-		sessions: make(map[string]*Session),
-		byToken:  make(map[string]string),
-		blobs:    make(map[string][]byte),
+		sessions:   make(map[string]*Session),
+		byToken:    make(map[string]string),
+		blobs:      make(map[string][]byte),
+		recordings: make(map[string]localRecording),
 	}
 }
 
@@ -165,11 +172,12 @@ func (s *Store) QueuePosition(id string) int {
 type AcceptError string
 
 const (
-	ErrNotFound   AcceptError = "not_found"
-	ErrConflict   AcceptError = "conflict"
-	ErrEmpty      AcceptError = "empty"
-	ErrBadRequest AcceptError = "bad_request"
-	ErrLimit      AcceptError = "limit"
+	ErrNotFound        AcceptError = "not_found"
+	ErrConflict        AcceptError = "conflict"
+	ErrEmpty           AcceptError = "empty"
+	ErrBadRequest      AcceptError = "bad_request"
+	ErrLimit           AcceptError = "limit"
+	ErrCaptureRequired AcceptError = "capture_required"
 )
 
 // Accept moves one waiting session to in_call.

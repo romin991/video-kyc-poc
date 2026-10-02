@@ -29,6 +29,17 @@ const (
 	DigitResponseMaxChars = 16
 	CaptureMaxCount       = 20
 	ImageMaxBytes         = 4 * 1024 * 1024
+	NoteMaxChars          = 4000
+	RecordingURLMax       = 2048
+	RecordingIDMax        = 200
+	RecordingMaxBytes     = 40 * 1024 * 1024
+)
+
+// Disposition is the after-call decision stored on the session.
+const (
+	DispositionApprove = "approve"
+	DispositionReject  = "reject"
+	DispositionUTV     = "utv"
 )
 
 // MaPrompt is the question currently on the customer screen.
@@ -90,6 +101,12 @@ type Patch struct {
 	MaMatch         *bool
 	HasDigitMatch   bool
 	DigitMatch      *bool
+	HasAcwNotes     bool
+	AcwNotes        string
+	// HasDisposition is set when the patch includes the field.
+	// A nil Disposition clears it. A non-nil value is approve, reject, or utv.
+	HasDisposition bool
+	Disposition    *string
 }
 
 // ChecklistUpdate sets one known item.

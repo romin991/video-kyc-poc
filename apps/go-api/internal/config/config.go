@@ -28,12 +28,15 @@ var defaultCORS = []string{
 
 // Config is the process configuration for the session API.
 type Config struct {
-	Addr             string
-	CustomerOrigin   string
-	CORSOrigins      []string
-	LiveKitURL       string
-	LiveKitAPIKey    string
-	LiveKitAPISecret string
+	Addr               string
+	CustomerOrigin     string
+	CORSOrigins        []string
+	LiveKitURL         string
+	LiveKitAPIKey      string
+	LiveKitAPISecret   string
+	CRMWebhookURL      string
+	DatalakeWebhookURL string
+	DispositionLogPath string
 }
 
 // Load reads environment variables. Existing process values win over .env.
@@ -48,13 +51,46 @@ func Load() Config {
 		origin = defaultCustomerOrigin
 	}
 	return Config{
-		Addr:             "127.0.0.1:" + port,
-		CustomerOrigin:   origin,
-		CORSOrigins:      readList(os.Getenv("CORS_ORIGINS"), defaultCORS),
-		LiveKitURL:       strings.TrimSpace(os.Getenv("LIVEKIT_URL")),
-		LiveKitAPIKey:    strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY")),
-		LiveKitAPISecret: strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET")),
+		Addr:               "127.0.0.1:" + port,
+		CustomerOrigin:     origin,
+		CORSOrigins:        readList(os.Getenv("CORS_ORIGINS"), defaultCORS),
+		LiveKitURL:         strings.TrimSpace(os.Getenv("LIVEKIT_URL")),
+		LiveKitAPIKey:      strings.TrimSpace(os.Getenv("LIVEKIT_API_KEY")),
+		LiveKitAPISecret:   strings.TrimSpace(os.Getenv("LIVEKIT_API_SECRET")),
+		CRMWebhookURL:      strings.TrimSpace(os.Getenv("CRM_STUB_WEBHOOK_URL")),
+		DatalakeWebhookURL: strings.TrimSpace(os.Getenv("DATALAKE_STUB_WEBHOOK_URL")),
+		DispositionLogPath: dispositionLogPath(os.Getenv("DISPOSITION_STUB_LOG_PATH")),
 	}
+}
+
+func dispositionLogPath(value string) string {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		raw = "data/disposition-stubs.jsonl"
+	}
+	if filepath.IsAbs(raw) {
+		return raw
+	}
+	return filepath.Join(repoRoot(), raw)
+}
+
+func repoRoot() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	dir := cwd
+	for i := 0; i < 6; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "pnpm-workspace.yaml")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return cwd
 }
 
 func readList(value string, fallback []string) []string {

@@ -31,6 +31,16 @@ func (s *Store) Update(id string, patch Patch, now time.Time) (*Session, AcceptE
 				return nil, ErrBadRequest, "Unknown checklist item: " + item.ID
 			}
 		}
+	}
+	if patch.HasDisposition && patch.Disposition != nil {
+		if session.Status != StatusEnded {
+			return nil, ErrConflict, "Disposition is saved in after-call work, once the session has ended"
+		}
+		if len(session.Captures) == 0 {
+			return nil, ErrCaptureRequired, "Add at least one still before setting a disposition"
+		}
+	}
+	if patch.HasChecklist {
 		for _, item := range patch.Checklist {
 			setChecklist(session.Checklist, item.ID, item.Checked)
 		}
@@ -73,6 +83,16 @@ func (s *Store) Update(id string, patch Patch, now time.Time) (*Session, AcceptE
 	}
 	if patch.HasDigitMatch && patch.DigitMatch != nil && *patch.DigitMatch {
 		tickChecklist(session.Checklist, "liveness_digits")
+	}
+	if patch.HasAcwNotes {
+		session.AcwNotes = patch.AcwNotes
+	}
+	if patch.HasDisposition {
+		if patch.Disposition == nil {
+			session.Disposition = ""
+		} else {
+			session.Disposition = *patch.Disposition
+		}
 	}
 	return clone(session), "", ""
 }

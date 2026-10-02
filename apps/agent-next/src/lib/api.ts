@@ -2,6 +2,8 @@ export type SessionStatus = "waiting" | "in_call" | "ended";
 
 export type CaptureKind = "face" | "id" | "selfie_ktp" | "other";
 
+export type Disposition = "approve" | "reject" | "utv";
+
 export type MaField = "full_name" | "dob" | "mothers_maiden_name";
 
 export interface ChecklistItem {
@@ -63,6 +65,11 @@ export interface Session {
   maMatch: boolean | null;
   digitMatch: boolean | null;
   captures: CaptureSummary[];
+  acwNotes: string;
+  disposition: Disposition | null;
+  recordingUrl: string | null;
+  recordingId: string | null;
+  recordingAttachedAt: string | null;
 }
 
 export interface ClaimResult {
