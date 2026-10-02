@@ -2,7 +2,7 @@
 
 ## Company stack (R1) — product path
 
-Go API and two Next.js App Router shells. Session create, join-by-token, the waiting queue, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. LiveKit egress and the browser MediaRecorder stay with the WebRTC work. After-call disposition, the recording playback slot, and CRM and datalake stub webhooks are on this Go API and the Next.js agent desk. Workforce management beyond a single claim stays out.
+Go API and two Next.js App Router shells. Session create, join-by-token, the waiting queue, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. The agent desk records a connected call with a browser MediaRecorder and uploads that WebM when the session ends. Cloud LiveKit egress stays optional. After-call disposition, the recording playback slot, and CRM and datalake stub webhooks are on this Go API and the Next.js agent desk. Workforce management beyond a single claim stays out.
 
 Requires Go 1.23+ and Node.js 20+.
 
@@ -47,8 +47,8 @@ The API listens on `127.0.0.1` only and keeps sessions in memory. It reads a rep
 1. Open the agent desk and the customer app. **Create session** on the desk, or **Enter the queue** on the customer app (the name is optional). Do that twice. Both rows show under **Waiting queue** as **Waiting**, oldest first.
 2. Open a join link (`http://127.0.0.1:3002/join/<token>`). The page says **Waiting for an agent** and the place in line. An unclaimed customer stays there.
 3. On the desk, **Claim** one row, or **Claim next** for the oldest waiting session. That session opens the existing call and the manual-auth desk. The other row stays **Waiting**. Further claims stay disabled until **End session**.
-4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder. The checklist, questions, digits, and stills on that desk are unchanged.
-5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The customer shows **Session ended** on its next poll. The agent desk leaves the call and opens after-call work for that session. The other session is still **Waiting**.
+4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. While the customer camera is live, the agent desk records that tile and both microphones in the browser (`data-call-recording="on"`). Cloud egress is not required. Without credentials the token is `lk-stub-…`, the tiles stay on the placeholder, and nothing is recorded.
+5. **End session** on the agent desk uploads that WebM to `POST /sessions/:id/call-recording`, then disconnects the LiveKit room and stops the local camera and microphone. After-call work plays `recordingUrl`. Ending from the customer window still closes the call; the agent uploads the tape it already captured as the stage unmounts. The customer shows **Session ended** on its next poll. The other session is still **Waiting**.
 
 ### HTTP flow
 
@@ -239,7 +239,7 @@ The patch returns `disposition: "approve"`. The evidence endpoint returns two ob
 
 ### For vkyc webrtc — recording attach
 
-This API does not start LiveKit egress or a browser `MediaRecorder`. Two hooks are enough for the desk to show a link and a player once a file exists.
+The agent desk (`packages/vkyc-livekit` `useCallRecording`) starts a browser MediaRecorder when the call is connected and the customer tile has a live video track. **End session** stops that recorder and POSTs the WebM here before the call stage unmounts. After-call work already plays `recordingUrl` from the session. Cloud LiveKit egress is optional: a later attach can still replace the URL. This API does not start egress itself.
 
 Attach a URL or id. At least one field is required. An omitted field stays as it is. `recordingUrl` is `http` or `https`, 2048 characters max. `recordingId` is trimmed, 200 characters max. Any session status is accepted. `200` returns the session.
 

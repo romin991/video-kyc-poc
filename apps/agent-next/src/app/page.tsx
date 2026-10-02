@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallMedia } from "@vkyc/livekit";
+import { useCallMedia, useCallRecording } from "@vkyc/livekit";
 import { useEffect, useState } from "react";
 import { KycDesk } from "@/app/kyc-desk";
 import {
@@ -11,6 +11,7 @@ import {
   getHealth,
   listSessions,
   serverUrlFor,
+  uploadCallRecording,
   type ClaimResult,
   type Session,
 } from "@/lib/api";
@@ -82,12 +83,16 @@ function VideoTile({ label, slot }: { label: string; slot: "local" | "remote" })
 function CallStage({
   call,
   label,
+  agentName,
   onEnd,
+  onUploadFailed,
   busy,
 }: {
   call: ClaimResult;
   label: string;
-  onEnd: () => void;
+  agentName: string;
+  onEnd: () => Promise<void>;
+  onUploadFailed: (message: string) => void;
   busy: boolean;
 }) {
   const serverUrl = serverUrlFor(call.livekitUrl);
@@ -96,17 +101,45 @@ function CallStage({
     token: call.agentToken,
     roomName: call.roomName,
   });
+  const recording = useCallRecording(call.sessionId, media.phase === "connected", (sessionId, blob) =>
+    uploadCallRecording(sessionId, agentName, blob).then(() => undefined),
+  );
+  const [ending, setEnding] = useState(false);
+  const showRecorder = media.phase === "connected" || media.phase === "connecting";
+
+  async function finish() {
+    setEnding(true);
+    let uploadError: string | null = null;
+    try {
+      await recording.stopAndUpload(call.sessionId);
+    } catch (err) {
+      uploadError = err instanceof Error ? err.message : "Could not upload the call recording.";
+    }
+    try {
+      await onEnd();
+      if (uploadError) onUploadFailed(uploadError);
+    } finally {
+      setEnding(false);
+    }
+  }
 
   return (
-    <section className="panel" data-call="active" data-status="in_call" data-room-name={call.roomName} data-call-phase={media.phase}>
+    <section
+      className="panel"
+      data-call="active"
+      data-status="in_call"
+      data-room-name={call.roomName}
+      data-call-phase={media.phase}
+      data-call-recording={recording.capturing ? "on" : "off"}
+    >
       <div className="call-head">
         <div>
           <StatusPill status="in_call" />
           <h2>{label}</h2>
           <p className="meta">Room {call.roomName}</p>
         </div>
-        <button type="button" className="danger" data-action="end" disabled={busy} onClick={onEnd}>
-          {busy ? "Ending…" : "End session"}
+        <button type="button" className="danger" data-action="end" disabled={busy || ending} onClick={() => void finish()}>
+          {busy || ending ? "Ending…" : "End session"}
         </button>
       </div>
       <div className="stage">
@@ -116,6 +149,13 @@ function CallStage({
       <p className="media-note" data-media-detail={media.detail}>
         {media.detail || "Preparing the LiveKit connect point."}
       </p>
+      {showRecorder ? (
+        <p className="meta" data-call-recording-state={recording.capturing ? "on" : "waiting"}>
+          {recording.capturing
+            ? "Recording this call in the browser."
+            : "Browser recording starts when the customer camera is live."}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -236,6 +276,7 @@ export default function DeskPage() {
         <>
         <CallStage
           call={call}
+          agentName={agent}
           label={sessionLabel(
             sessions.find((session) => session.id === call.sessionId) ?? {
               id: call.sessionId,
@@ -243,8 +284,10 @@ export default function DeskPage() {
             },
           )}
           busy={busy === "end"}
-          onEnd={() =>
-            void run("end", async () => {
+          onUploadFailed={setError}
+          onEnd={async () => {
+            setBusy("end");
+            try {
               const sessionId = call.sessionId;
               await endSession(sessionId, agent);
               setCall(null);
@@ -252,8 +295,12 @@ export default function DeskPage() {
               writeAcw(sessionId);
               setNotice("Session ended. Finish after-call work: notes, stills, and a disposition.");
               await refresh();
-            })
-          }
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Request failed.");
+            } finally {
+              setBusy(null);
+            }
+          }}
         />
         <KycDesk sessionId={call.sessionId} agentName={agent} phase="call" />
         </>

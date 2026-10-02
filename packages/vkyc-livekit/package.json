@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --import tsx --test src/mediaSession.test.ts src/roomSession.test.ts",
+    "test": "node --import tsx --test src/callTape.test.ts src/mediaSession.test.ts src/roomSession.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
