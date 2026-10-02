@@ -154,6 +154,57 @@ export function endSession(id: string, agentName: string): Promise<EndResult> {
   return request(`/sessions/${encodeURIComponent(id)}/end`, agentName, { method: "POST" });
 }
 
+export interface CallRecordingUpload {
+  recordingId: string;
+  recordingUrl: string;
+}
+
+/** POST the browser WebM. The API stores it and sets session.recordingUrl. */
+export async function uploadCallRecording(
+  id: string,
+  agentName: string,
+  video: Blob,
+): Promise<CallRecordingUpload> {
+  const type = video.type.split(";")[0]?.trim().toLowerCase() === "video/mp4" ? "video/mp4" : "video/webm";
+  const headers = new Headers();
+  headers.set("X-Demo-Agent", agentName);
+  headers.set("Content-Type", type);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/call-recording`, {
+      method: "POST",
+      headers,
+      body: video,
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("Cannot reach the API. Start it with go run ./cmd/vkyc-api from apps/go-api.", 0);
+  }
+
+  const text = await response.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text) as unknown;
+    } catch {
+      throw new ApiError("API returned a non-JSON response", response.status);
+    }
+  }
+  if (!response.ok) {
+    const message =
+      data && typeof data === "object" && "message" in data && typeof data.message === "string"
+        ? data.message
+        : response.statusText;
+    throw new ApiError(message, response.status);
+  }
+  const body = data as Partial<CallRecordingUpload>;
+  if (!body.recordingId || !body.recordingUrl) {
+    throw new ApiError("API did not return a recording URL", response.status);
+  }
+  return { recordingId: body.recordingId, recordingUrl: body.recordingUrl };
+}
+
 export function getSession(id: string, agentName: string): Promise<Session> {
   return request(`/sessions/${encodeURIComponent(id)}`, agentName);
 }
