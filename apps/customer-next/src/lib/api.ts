@@ -20,6 +20,7 @@ export interface JoinInfo {
   customerToken: string;
   status: SessionStatus;
   queuePosition: number | null;
+  displayName: string | null;
   livekitUrl: string;
   captureGuide: CaptureKind | null;
   maPrompt: MaPrompt | null;
@@ -64,6 +65,27 @@ function messageOf(data: unknown, fallback: string): string {
     return data.message;
   }
   return fallback;
+}
+
+export async function enterQueue(displayName: string): Promise<{ id: string; joinToken: string; status: SessionStatus }> {
+  const trimmed = displayName.trim();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Demo-Agent": "Customer",
+      },
+      body: JSON.stringify(trimmed ? { displayName: trimmed } : {}),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError("Cannot reach the verification service.", 0);
+  }
+  const data = await read(response);
+  if (!response.ok) throw new ApiError(messageOf(data, response.statusText), response.status);
+  return data as { id: string; joinToken: string; status: SessionStatus };
 }
 
 export async function fetchJoin(token: string): Promise<JoinInfo> {

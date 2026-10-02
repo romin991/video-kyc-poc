@@ -30,6 +30,7 @@ type Session struct {
 	RoomName         string
 	CreatedAt        time.Time
 	CreatedBy        string
+	DisplayName      string
 	ClaimedBy        string
 	AcceptedAt       time.Time
 	EndedAt          time.Time
@@ -69,22 +70,24 @@ func RoomName(sessionID string) string {
 }
 
 // Create stores a waiting session. The join token is not the session id.
-func (s *Store) Create(createdBy string, now time.Time) *Session {
+// displayName is the queue label. It is empty when the caller did not send one.
+func (s *Store) Create(createdBy, displayName string, now time.Time) *Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.arrival++
 	session := &Session{
-		ID:        newSessionID(),
-		JoinToken: newJoinToken(),
-		Status:    StatusWaiting,
-		RoomName:  RoomName(""),
-		CreatedAt: now.UTC(),
-		CreatedBy: createdBy,
-		Checklist: defaultChecklist(),
-		MaAnswers: []MaAnswer{},
-		Captures:  []Capture{},
-		arrival:   s.arrival,
+		ID:          newSessionID(),
+		JoinToken:   newJoinToken(),
+		Status:      StatusWaiting,
+		RoomName:    RoomName(""),
+		CreatedAt:   now.UTC(),
+		CreatedBy:   createdBy,
+		DisplayName: displayName,
+		Checklist:   defaultChecklist(),
+		MaAnswers:   []MaAnswer{},
+		Captures:    []Capture{},
+		arrival:     s.arrival,
 	}
 	session.RoomName = RoomName(session.ID)
 	s.sessions[session.ID] = session

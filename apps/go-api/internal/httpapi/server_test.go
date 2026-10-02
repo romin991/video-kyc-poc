@@ -200,6 +200,98 @@ func TestClaimKeepsTheOtherSessionWaiting(t *testing.T) {
 	}
 }
 
+func TestInboundNamesClaimOneLeaveTheOtherWaiting(t *testing.T) {
+	srv := newTestServer(t, nil)
+	defer srv.Close()
+
+	code, first := do(t, srv.URL, http.MethodPost, "/sessions", `{"displayName":"  Ayu Prameswari  "}`, map[string]string{
+		"X-Demo-Agent": "Customer",
+	})
+	if code != http.StatusCreated || first["displayName"] != "Ayu Prameswari" || first["status"] != "waiting" || first["createdBy"] != "Customer" {
+		t.Fatalf("first %d %#v", code, first)
+	}
+	if first["queuePosition"] != float64(1) || first["agentToken"] != nil {
+		t.Fatalf("first token/position %#v", first)
+	}
+	code, second := do(t, srv.URL, http.MethodPost, "/sessions", `{"fullName":"Budi Santoso","phone":"+62000"}`, map[string]string{
+		"X-Demo-Agent": "Customer",
+	})
+	if code != http.StatusCreated || second["displayName"] != "Budi Santoso" || second["queuePosition"] != float64(2) {
+		t.Fatalf("second %d %#v", code, second)
+	}
+	if _, ok := second["phone"]; ok {
+		t.Fatalf("onboarding leaked %#v", second)
+	}
+	firstID := first["id"].(string)
+	secondID := second["id"].(string)
+	secondToken := second["joinToken"].(string)
+
+	_, queue := do(t, srv.URL, http.MethodGet, "/sessions?status=waiting", "", nil)
+	rows := queue["sessions"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("queue = %#v", queue)
+	}
+	if rows[0].(map[string]any)["displayName"] != "Ayu Prameswari" || rows[1].(map[string]any)["displayName"] != "Budi Santoso" {
+		t.Fatalf("queue order %#v", queue)
+	}
+
+	_, joined := do(t, srv.URL, http.MethodGet, "/join/"+secondToken, "", nil)
+	if joined["status"] != "waiting" || joined["queuePosition"] != float64(2) || joined["displayName"] != "Budi Santoso" {
+		t.Fatalf("unclaimed join %#v", joined)
+	}
+
+	code, claimed := do(t, srv.URL, http.MethodPost, "/sessions/claim", "", map[string]string{"X-Demo-Agent": "Desk 1"})
+	if code != http.StatusOK || claimed["sessionId"] != firstID || claimed["status"] != "in_call" || claimed["claimedBy"] != "Desk 1" {
+		t.Fatalf("claim %d %#v", code, claimed)
+	}
+	again, _ := do(t, srv.URL, http.MethodPost, "/sessions/"+firstID+"/accept", "", map[string]string{"X-Demo-Agent": "Desk 1"})
+	if again != http.StatusConflict {
+		t.Fatalf("second accept = %d", again)
+	}
+
+	_, remaining := do(t, srv.URL, http.MethodGet, "/sessions?status=waiting", "", nil)
+	left := remaining["sessions"].([]any)
+	if len(left) != 1 {
+		t.Fatalf("remaining %#v", remaining)
+	}
+	row := left[0].(map[string]any)
+	if row["id"] != secondID || row["status"] != "waiting" || row["queuePosition"] != float64(1) || row["displayName"] != "Budi Santoso" {
+		t.Fatalf("remaining row %#v", row)
+	}
+	_, still := do(t, srv.URL, http.MethodGet, "/join/"+secondToken, "", nil)
+	if still["status"] != "waiting" || still["queuePosition"] != float64(1) {
+		t.Fatalf("other join %#v", still)
+	}
+
+	endCode, ended := do(t, srv.URL, http.MethodPost, "/sessions/"+firstID+"/end", "", nil)
+	if endCode != http.StatusOK || ended["status"] != "ended" {
+		t.Fatalf("end %d %#v", endCode, ended)
+	}
+	endAgain, endedAgain := do(t, srv.URL, http.MethodPost, "/sessions/"+firstID+"/end", "", nil)
+	if endAgain != http.StatusOK || endedAgain["status"] != "ended" {
+		t.Fatalf("end again %d %#v", endAgain, endedAgain)
+	}
+	_, afterEnd := do(t, srv.URL, http.MethodGet, "/sessions?status=waiting", "", nil)
+	after := afterEnd["sessions"].([]any)
+	if len(after) != 1 || after[0].(map[string]any)["id"] != secondID {
+		t.Fatalf("queue after end %#v", afterEnd)
+	}
+
+	longName := strings.Repeat("a", 121)
+	bad, badBody := do(t, srv.URL, http.MethodPost, "/sessions", `{"displayName":"`+longName+`"}`, nil)
+	if bad != http.StatusBadRequest || badBody["message"] != "displayName must be a string of 120 characters or fewer" {
+		t.Fatalf("long name %d %#v", bad, badBody)
+	}
+	typed, _ := do(t, srv.URL, http.MethodPost, "/sessions", `{"displayName":1}`, nil)
+	if typed != http.StatusBadRequest {
+		t.Fatalf("typed name = %d", typed)
+	}
+	blankCode, blank := do(t, srv.URL, http.MethodPost, "/sessions", `{"displayName":"   "}`, nil)
+	if blankCode != http.StatusCreated || blank["displayName"] != nil || blank["status"] != "waiting" {
+		t.Fatalf("blank %d %#v", blankCode, blank)
+	}
+}
+
 func TestErrorsAndCORS(t *testing.T) {
 	srv := newTestServer(t, nil)
 	defer srv.Close()

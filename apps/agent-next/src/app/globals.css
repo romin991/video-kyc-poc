@@ -103,9 +103,50 @@ h1 {
 }
 
 .panel h2 {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 18px;
 }
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.panel-head .actions { margin-bottom: 0; }
+
+.count { color: #6d6458; font-size: 14px; align-self: center; }
+
+.queue { list-style: none; margin: 0; padding: 0; }
+
+.queue-note { margin-bottom: 12px; }
+
+.queue-lead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.queue-pos { color: #6d6458; }
+
+.pill {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pill-waiting { background: #fff4e5; color: #6b4a12; }
+.pill-in_call { background: #e7f4ee; color: #0f6e56; }
+.pill-ended { background: #eee8de; color: #3d3832; }
+
+.ended-list { margin-top: 16px; }
+.ended-list h3 { margin: 0 0 8px; font-size: 15px; }
 
 .rows { display: flex; flex-direction: column; gap: 10px; }
 
@@ -239,7 +280,7 @@ h1 {
 .choice-fail[aria-pressed="true"] { background: #8c2f2f; }
 
 @media (max-width: 720px) {
-  .top, .row, .stage, .call-head { display: flex; flex-direction: column; align-items: stretch; }
+  .top, .row, .stage, .call-head, .panel-head { display: flex; flex-direction: column; align-items: stretch; }
   .ma-grid { grid-template-columns: 1fr; }
   h1 { font-size: 26px; }
 }

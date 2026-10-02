@@ -47,6 +47,7 @@ export interface Session {
   roomName: string;
   createdAt: string;
   createdBy: string;
+  displayName: string | null;
   claimedBy: string | null;
   queuePosition: number | null;
   acceptedAt?: string;

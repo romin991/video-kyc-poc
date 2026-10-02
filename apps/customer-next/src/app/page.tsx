@@ -1,3 +1,5 @@
+import { EnterQueue } from "@/app/enter-queue";
+
 export default function HomePage() {
   return (
     <div className="frame">
@@ -10,12 +12,7 @@ export default function HomePage() {
           </div>
         </header>
         <div className="device-body">
-          <div className="stack">
-            <h1>Open your join link</h1>
-            <p>The agent desk copies a link after it creates a session. It looks like this:</p>
-            <p className="mono">/join/…</p>
-            <p>Keep that window open. The call starts when the agent accepts the session.</p>
-          </div>
+          <EnterQueue />
         </div>
       </div>
     </div>
