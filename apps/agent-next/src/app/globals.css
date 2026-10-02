@@ -24,6 +24,12 @@ button:disabled {
   opacity: 0.55;
 }
 
+.primary:disabled {
+  opacity: 1;
+  background: #e7e1d6;
+  color: #8a8175;
+}
+
 .desk {
   max-width: 1080px;
   margin: 0 auto;
