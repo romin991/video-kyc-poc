@@ -65,7 +65,7 @@ function CallStage({ call, onEnd, busy }: { call: ClaimResult; onEnd: () => void
         <VideoTile label="Customer" slot="remote" />
         <VideoTile label="You" slot="local" />
       </div>
-      <p className="media-note" data-media-detail="">
+      <p className="media-note" data-media-detail={media.detail}>
         {media.detail || "Preparing the LiveKit connect point."}
       </p>
     </section>

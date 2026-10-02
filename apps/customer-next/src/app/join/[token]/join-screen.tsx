@@ -90,7 +90,9 @@ function InCall({ info, onEnded }: { info: JoinInfo; onEnded: () => void }) {
         <VideoTile label="Agent" slot="remote" />
         <VideoTile label="You" slot="local" />
       </div>
-      <p className="media-note">{media.detail || "Preparing the LiveKit connect point."}</p>
+      <p className="media-note" data-media-detail={media.detail}>
+        {media.detail || "Preparing the LiveKit connect point."}
+      </p>
       {error ? <p className="problem">{error}</p> : null}
     </div>
   );

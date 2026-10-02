@@ -47,8 +47,8 @@ The API listens on `127.0.0.1` only and keeps sessions in memory. It reads a rep
 1. Open the agent desk. **Create session**. Copy the customer join link (`http://127.0.0.1:3002/join/<token>`).
 2. Open that link. The page says **Waiting for an agent**.
 3. On the desk, **Accept** that row, or **Claim next** for the oldest waiting session. A second waiting session stays in the list.
-4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, the shell calls `Room.connect`. Camera and microphone publish is the LiveKit client PR (`packages/vkyc-livekit/src/connectRoom.ts`). Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder.
-5. **End session** on either window. The other side shows **Session ended** on its next poll.
+4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder.
+5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The other side shows **Session ended** on its next poll.
 
 ### HTTP flow
 
@@ -85,7 +85,7 @@ When `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, those tokens are LiveKi
 
 CORS allows the Next.js origins (`127.0.0.1` and `localhost` on ports 3000 and 3002) and the Vite reference origins. `OPTIONS` returns 204.
 
-Mint lives in `apps/go-api/internal/livekit`. If the LiveKit branch lands its own mint package first, call that package from `ParticipantToken` instead of duplicating it. Browser `Room.connect` lives only in `packages/vkyc-livekit/src/connectRoom.ts`.
+Mint lives in `apps/go-api/internal/livekit`. Browser `Room.connect`, publish, subscribe, and End teardown live only in `packages/vkyc-livekit`. The agent and customer shells call `useCallMedia` and do not open a second room.
 
 ```bash
 cd apps/go-api && go test ./...
