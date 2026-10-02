@@ -298,6 +298,36 @@ test("a missing attach route is retried and does not fail the call", async () =>
   assert.equal(recorder.status("s").recordingId, "EG_1");
 });
 
+test("recording attach origin uses VERCEL_URL when RECORDING_ATTACH_ORIGIN is unset", async () => {
+  const urls: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    urls.push(String(input));
+    return new Response(null, { status: 204 });
+  };
+  const body = { recordingId: "EG_1" };
+  await postSessionRecording("s1", body, {
+    env: {
+      RECORDING_ATTACH_ORIGIN: "https://api.example/",
+      VERCEL_URL: "vkyc-api.vercel.app",
+      PORT: "3001",
+    },
+    fetchImpl,
+  });
+  await postSessionRecording("s1", body, {
+    env: { VERCEL_URL: "https://vkyc-api-abc.vercel.app/", PORT: "3001" },
+    fetchImpl,
+  });
+  await postSessionRecording("s1", body, {
+    env: { PORT: "3999" },
+    fetchImpl,
+  });
+  assert.deepEqual(urls, [
+    "https://api.example/sessions/s1/recording",
+    "https://vkyc-api-abc.vercel.app/sessions/s1/recording",
+    "http://127.0.0.1:3999/sessions/s1/recording",
+  ]);
+});
+
 test("postSessionRecording sends eng's POST /sessions/:id/recording contract", async () => {
   const seen: Array<{ method: string; url: string; body: unknown }> = [];
   const server = createServer((req, res) => {
