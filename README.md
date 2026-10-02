@@ -1,5 +1,108 @@
 # Superbank Video KYC POC
 
+## Company stack (R1) — product path
+
+Go API and two Next.js App Router shells. Session create, join-by-token, claim, accept, and end run here. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Manual authentication, digit prompts, captures, recording, and the workforce queue stay on that reference.
+
+Requires Go 1.23+ and Node.js 20+.
+
+```bash
+git clone https://github.com/romin991/video-kyc-poc.git
+cd video-kyc-poc
+corepack enable
+corepack prepare pnpm@10.33.3 --activate
+pnpm install
+
+# Optional LiveKit. Leave the key and secret unset to run the shell with lk-stub tokens.
+export LIVEKIT_URL=wss://your-project.livekit.cloud
+export LIVEKIT_API_KEY=your_api_key
+export LIVEKIT_API_SECRET=your_api_secret
+export NEXT_PUBLIC_LIVEKIT_URL="$LIVEKIT_URL"
+export NEXT_PUBLIC_API_BASE=http://127.0.0.1:3001
+export CUSTOMER_APP_ORIGIN=http://127.0.0.1:3002
+```
+
+Three terminals:
+
+```bash
+cd apps/go-api && go run ./cmd/vkyc-api
+```
+
+```bash
+pnpm dev:agent-next
+```
+
+```bash
+pnpm dev:customer-next
+```
+
+| Process | URL |
+| --- | --- |
+| Go API | http://127.0.0.1:3001 |
+| Agent desk | http://127.0.0.1:3000 |
+| Customer join | http://127.0.0.1:3002 |
+
+The API listens on `127.0.0.1` only and keeps sessions in memory. It reads a repo-root `.env` without overriding variables already set in the shell. `CUSTOMER_APP_ORIGIN` in `.env.example` points at the Vite reference app; export `http://127.0.0.1:3002` before `go run` so join links open the Next.js customer app.
+
+1. Open the agent desk. **Create session**. Copy the customer join link (`http://127.0.0.1:3002/join/<token>`).
+2. Open that link. The page says **Waiting for an agent**.
+3. On the desk, **Accept** that row, or **Claim next** for the oldest waiting session. A second waiting session stays in the list.
+4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, the shell calls `Room.connect`. Camera and microphone publish is the LiveKit client PR (`packages/vkyc-livekit/src/connectRoom.ts`). Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder.
+5. **End session** on either window. The other side shows **Session ended** on its next poll.
+
+### HTTP flow
+
+```bash
+export CUSTOMER_APP_ORIGIN=http://127.0.0.1:3002
+# API already running on 127.0.0.1:3001
+
+curl -s -X POST http://127.0.0.1:3001/sessions \
+  -H 'content-type: application/json' \
+  -H 'x-demo-agent: Desk 1' \
+  -d '{}'
+
+# Then, with id and joinToken from that body:
+curl -s http://127.0.0.1:3001/join/$TOKEN
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/accept -H 'x-demo-agent: Desk 1'
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/end
+curl -s http://127.0.0.1:3001/join/$TOKEN
+```
+
+`POST /sessions` returns `status: "waiting"` and does not include `agentToken` or `customerToken`. `roomName` is `vkyc-${sessionId}`. `GET /join/:token` returns `customerToken`. `POST /sessions/:id/accept` and `POST /sessions/claim` return `agentToken`, `roomName`, and `status: "in_call"`. A second accept is `409`. An empty claim is `409`. End is idempotent and returns `{ "status": "ended", "sessionId" }`. `X-Demo-Agent` is stored as `createdBy` on create and `claimedBy` on claim or accept.
+
+When `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, those tokens are LiveKit JWTs from `github.com/livekit/protocol/auth` (the Go equivalent of `livekit-server-sdk`): identity `agent` or `customer`, `roomJoin`, `canPublish`, `canSubscribe`, room `vkyc-${sessionId}`, TTL 10 minutes, reused until a minute before expiry. Otherwise the token is `lk-stub-<role>-<room>` and accept/join still succeed. `livekitUrl` on the JSON body is `LIVEKIT_URL`.
+
+| Method | Path | Result |
+| --- | --- |
+| `POST` | `/sessions` | waiting session, join URL |
+| `GET` | `/sessions?status=waiting` | waiting sessions, oldest first |
+| `GET` | `/sessions/:id` | one session |
+| `POST` | `/sessions/claim` | oldest waiting session → in call |
+| `POST` | `/sessions/:id/accept` | that waiting session → in call |
+| `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
+| `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, queuePosition, livekitUrl }` |
+| `GET` | `/health` | `{ ok: true, service: "vkyc-api", stack: "go" }` |
+
+CORS allows the Next.js origins (`127.0.0.1` and `localhost` on ports 3000 and 3002) and the Vite reference origins. `OPTIONS` returns 204.
+
+Mint lives in `apps/go-api/internal/livekit`. If the LiveKit branch lands its own mint package first, call that package from `ParticipantToken` instead of duplicating it. Browser `Room.connect` lives only in `packages/vkyc-livekit/src/connectRoom.ts`.
+
+```bash
+cd apps/go-api && go test ./...
+pnpm --filter @vkyc/agent-next --filter @vkyc/customer-next --filter @vkyc/livekit typecheck
+```
+
+### Layout
+
+```
+apps/go-api            Go session API, in-memory store, LiveKit JWT mint
+apps/agent-next        Next.js agent desk (create, claim, accept, end)
+apps/customer-next     Next.js customer join (token link, end)
+packages/vkyc-livekit  livekit-client connect hook shared by both shells
+```
+
+## Reference stack (Express + Vite)
+
 Video KYC proof of concept. A new session enters the agent waiting queue. The customer opens a join link and waits. The agent claims one session, both sides enter the existing call, and the agent ends the session and sets a disposition. Any other waiting session stays in the queue. Wave 1 adds a stub customer payload, a checklist, still-frame captures, after-call notes, and a disposition (Approve, Reject, or UTV) on that same session. Wave 3 lets LiveKit egress attach a recording URL, shows that link in after-call work, and sends a CRM and datalake stub when a disposition is saved. Wave 4 adds manual-authentication questions (full name, date of birth, mother's maiden name), a digit prompt, and still kinds for face, ID, selfie + KTP, and an extra document. Matching is a pass/fail toggle on the desk. There is no bureau, OCR, or liveness model.
 
 When LiveKit is configured, both browsers join room `vkyc-<sessionId>` and publish camera and microphone. When it is not, accept and join still succeed with non-connecting `lk-stub-…` tokens and the call shell stays up. OCR, liveness models, IDV, AML, SSO, and production hardening are out of scope. The checklist is a manual checkbox, not a model.

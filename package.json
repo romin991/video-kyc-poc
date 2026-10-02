@@ -12,6 +12,10 @@
     "dev:api": "pnpm --filter @vkyc/api dev",
     "dev:agent": "pnpm --filter @vkyc/agent-dashboard dev",
     "dev:customer": "pnpm --filter @vkyc/customer-webview dev",
+    "dev:go-api": "cd apps/go-api && go run ./cmd/vkyc-api",
+    "test:go": "cd apps/go-api && go test ./...",
+    "dev:agent-next": "pnpm --filter @vkyc/agent-next dev",
+    "dev:customer-next": "pnpm --filter @vkyc/customer-next dev",
     "build": "pnpm --filter @vkyc/agent-dashboard --filter @vkyc/customer-webview build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @vkyc/api test"
