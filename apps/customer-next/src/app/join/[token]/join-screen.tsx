@@ -2,7 +2,7 @@
 
 import { useCallMedia } from "@vkyc/livekit";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ApiError, endSession, fetchJoin, serverUrlFor, type JoinInfo } from "@/lib/api";
+import { ApiError, endSession, fetchJoin, postJoinReply, serverUrlFor, type DigitChallenge, type JoinInfo, type MaPrompt } from "@/lib/api";
 
 const POLL_MS = 1500;
 
@@ -21,10 +21,25 @@ function placeLabel(position: number): string {
   }
 }
 
-function VideoTile({ label, slot }: { label: string; slot: "local" | "remote" }) {
+function IdCaptureGuide() {
+  return (
+    <div className="id-guide" data-capture-guide="id" role="status">
+      <p className="id-guide-copy">align ID inside the box</p>
+      <div className="id-frame" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
+function VideoTile({ label, slot, idGuide = false }: { label: string; slot: "local" | "remote"; idGuide?: boolean }) {
   return (
     <section className={`tile tile-${slot}`} aria-label={label}>
       <video data-livekit={slot} autoPlay muted={slot === "local"} playsInline />
+      {idGuide ? <IdCaptureGuide /> : null}
       <div className="tile-fallback">
         <p>{label}</p>
         <small>{slot === "local" ? "Your camera" : "Their camera"}</small>
@@ -50,7 +65,7 @@ function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-function InCall({ info, onEnded }: { info: JoinInfo; onEnded: () => void }) {
+function InCall({ info, token, onEnded }: { info: JoinInfo; token: string; onEnded: () => void }) {
   const serverUrl = serverUrlFor(info.livekitUrl);
   const media = useCallMedia({
     serverUrl: serverUrl || null,
@@ -59,6 +74,22 @@ function InCall({ info, onEnded }: { info: JoinInfo; onEnded: () => void }) {
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [maDraft, setMaDraft] = useState("");
+  const [digitDraft, setDigitDraft] = useState("");
+  const [sending, setSending] = useState<"ma" | "digit" | null>(null);
+  const [replyNote, setReplyNote] = useState<string | null>(null);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [hideMaSentAt, setHideMaSentAt] = useState<string | null>(null);
+  const [hideDigitSentAt, setHideDigitSentAt] = useState<string | null>(null);
+
+  const maPrompt: MaPrompt | null = info.maPrompt && info.maPrompt.sentAt !== hideMaSentAt ? info.maPrompt : null;
+  const digitChallenge: DigitChallenge | null =
+    info.digitChallenge && info.digitChallenge.sentAt !== hideDigitSentAt ? info.digitChallenge : null;
+  const idGuide = info.captureGuide === "id";
+
+  useEffect(() => {
+    if (maPrompt || digitChallenge) setReplyNote(null);
+  }, [maPrompt, digitChallenge]);
 
   return (
     <div className="call" data-call="active" data-room-name={info.roomName} data-call-phase={media.phase}>
@@ -86,9 +117,97 @@ function InCall({ info, onEnded }: { info: JoinInfo; onEnded: () => void }) {
           {busy ? "Ending…" : "End session"}
         </button>
       </div>
-      <div className="stage">
+      <div className="prompts" aria-live="polite">
+        {maPrompt ? (
+          <form
+            className="prompt-card"
+            data-kyc="ma-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const answer = maDraft.trim();
+              if (!answer) return;
+              const sentAt = maPrompt.sentAt;
+              setSending("ma");
+              setReplyError(null);
+              void postJoinReply(token, { answer })
+                .then(() => {
+                  setMaDraft("");
+                  setHideMaSentAt(sentAt);
+                  setReplyNote("Answer sent.");
+                })
+                .catch((err: unknown) => {
+                  setReplyError(err instanceof Error ? err.message : "Could not send the answer.");
+                })
+                .finally(() => setSending((current) => (current === "ma" ? null : current)));
+            }}
+          >
+            <p className="eyebrow">Agent question</p>
+            <p className="prompt-copy">{maPrompt.prompt}</p>
+            <label className="name-field">
+              <span>Your answer</span>
+              <input
+                value={maDraft}
+                maxLength={200}
+                autoComplete="off"
+                data-kyc="ma-answer"
+                onChange={(event) => setMaDraft(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary" disabled={sending !== null || maDraft.trim().length === 0}>
+              {sending === "ma" ? "Sending…" : "Send answer"}
+            </button>
+          </form>
+        ) : null}
+        {digitChallenge ? (
+          <form
+            className="prompt-card"
+            data-kyc="digit-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const digitResponse = digitDraft.trim();
+              if (!digitResponse) return;
+              const sentAt = digitChallenge.sentAt;
+              setSending("digit");
+              setReplyError(null);
+              void postJoinReply(token, { digitResponse })
+                .then(() => {
+                  setDigitDraft("");
+                  setHideDigitSentAt(sentAt);
+                  setReplyNote("Digits sent.");
+                })
+                .catch((err: unknown) => {
+                  setReplyError(err instanceof Error ? err.message : "Could not send the digits.");
+                })
+                .finally(() => setSending((current) => (current === "digit" ? null : current)));
+            }}
+          >
+            <p className="eyebrow">Read these digits</p>
+            <p className="digit-readout" data-kyc="digit-readout">
+              {digitChallenge.digits}
+            </p>
+            <p className="prompt-copy">{digitChallenge.prompt}</p>
+            <label className="name-field">
+              <span>Type the digits</span>
+              <input
+                value={digitDraft}
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={16}
+                data-kyc="digit-answer"
+                onChange={(event) => setDigitDraft(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary" disabled={sending !== null || digitDraft.trim().length === 0}>
+              {sending === "digit" ? "Sending…" : "Send digits"}
+            </button>
+          </form>
+        ) : null}
+        {replyNote && !maPrompt && !digitChallenge ? <p className="sent-note">{replyNote}</p> : null}
+        {replyError ? <p className="problem">{replyError}</p> : null}
+      </div>
+      <div className={idGuide ? "stage stage-id" : "stage"} data-capture-guide={idGuide ? "id" : "off"}>
         <VideoTile label="Agent" slot="remote" />
-        <VideoTile label="You" slot="local" />
+        <VideoTile label="You" slot="local" idGuide={idGuide} />
       </div>
       <p className="media-note" data-media-detail={media.detail}>
         {media.detail || "Preparing the LiveKit connect point."}
@@ -182,6 +301,7 @@ export function JoinScreen({ token }: { token: string }) {
     body = (
       <InCall
         info={info}
+        token={token}
         onEnded={() => {
           closed.current = true;
           setInfo({ ...info, status: "ended", queuePosition: null });

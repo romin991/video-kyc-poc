@@ -1,5 +1,44 @@
 export type SessionStatus = "waiting" | "in_call" | "ended";
 
+export type CaptureKind = "face" | "id" | "selfie_ktp" | "other";
+
+export type MaField = "full_name" | "dob" | "mothers_maiden_name";
+
+export interface ChecklistItem {
+  id: string;
+  label: string;
+  checked: boolean;
+}
+
+export interface MaPrompt {
+  field: MaField;
+  prompt: string;
+  sentAt: string;
+}
+
+export interface MaAnswer {
+  field: MaField;
+  prompt: string;
+  answer: string;
+  answeredAt: string;
+}
+
+export interface DigitChallenge {
+  digits: string;
+  prompt: string;
+  sentAt: string;
+}
+
+export interface CaptureSummary {
+  id: string;
+  url: string;
+  path: string;
+  kind: CaptureKind;
+  contentType: "image/jpeg" | "image/png";
+  createdAt: string;
+  capturedAt: string;
+}
+
 export interface Session {
   id: string;
   joinUrl: string;
@@ -13,6 +52,16 @@ export interface Session {
   acceptedAt?: string;
   endedAt?: string;
   livekitUrl: string;
+  checklist: ChecklistItem[];
+  captureGuide: CaptureKind | null;
+  maPrompt: MaPrompt | null;
+  maAnswers: MaAnswer[];
+  digitChallenge: DigitChallenge | null;
+  digitResponse: string | null;
+  digitRespondedAt: string | null;
+  maMatch: boolean | null;
+  digitMatch: boolean | null;
+  captures: CaptureSummary[];
 }
 
 export interface ClaimResult {
@@ -95,6 +144,24 @@ export function claimNextSession(agentName: string): Promise<ClaimResult> {
 
 export function endSession(id: string, agentName: string): Promise<EndResult> {
   return request(`/sessions/${encodeURIComponent(id)}/end`, agentName, { method: "POST" });
+}
+
+export function getSession(id: string, agentName: string): Promise<Session> {
+  return request(`/sessions/${encodeURIComponent(id)}`, agentName);
+}
+
+export function patchSession(id: string, agentName: string, patch: Record<string, unknown>): Promise<Session> {
+  return request(`/sessions/${encodeURIComponent(id)}`, agentName, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function uploadCapture(id: string, agentName: string, image: string, kind: CaptureKind): Promise<CaptureSummary> {
+  return request(`/sessions/${encodeURIComponent(id)}/captures`, agentName, {
+    method: "POST",
+    body: JSON.stringify({ image, kind }),
+  });
 }
 
 export async function getHealth(): Promise<boolean> {

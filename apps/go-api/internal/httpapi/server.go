@@ -1,6 +1,7 @@
-// Package httpapi is the P0 session shell: create, join-by-token, claim,
-// accept, and end. Checklist, captures, manual authentication, and recording
-// stay on the Express reference.
+// Package httpapi is the session shell: create, join-by-token, claim, accept,
+// and end, plus manual authentication, digit prompts, checklist ticks, and
+// still captures. Recording and after-call disposition stay on the Express
+// reference.
 package httpapi
 
 import (
@@ -53,9 +54,13 @@ func New(store *session.Store, cfg config.Config, minter livekit.Minter) http.Ha
 	mux.HandleFunc("GET /sessions", srv.list)
 	mux.HandleFunc("POST /sessions/claim", srv.claim)
 	mux.HandleFunc("GET /sessions/{id}", srv.get)
+	mux.HandleFunc("PATCH /sessions/{id}", srv.patch)
 	mux.HandleFunc("POST /sessions/{id}/accept", srv.accept)
 	mux.HandleFunc("POST /sessions/{id}/end", srv.end)
+	mux.HandleFunc("POST /sessions/{id}/captures", srv.createCapture)
+	mux.HandleFunc("GET /sessions/{id}/captures/{captureId}", srv.getCapture)
 	mux.HandleFunc("GET /join/{token}", srv.join)
+	mux.HandleFunc("POST /join/{token}/replies", srv.reply)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Route not found")
 	})
@@ -69,7 +74,7 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		if _, ok := s.corsOrigins[origin]; ok {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Demo-Agent")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
@@ -97,7 +102,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created := s.store.Create(demoAgent(r), s.now())
-	writeJSON(w, http.StatusCreated, s.sessionJSON(created))
+	writeJSON(w, http.StatusCreated, s.sessionJSON(r, created))
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +120,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	sessions := s.store.List(status)
 	body := make([]sessionBody, 0, len(sessions))
 	for _, item := range sessions {
-		body = append(body, s.sessionJSON(item))
+		body = append(body, s.sessionJSON(r, item))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": body})
 }
@@ -126,7 +131,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Session not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.sessionJSON(item))
+	writeJSON(w, http.StatusOK, s.sessionJSON(r, item))
 }
 
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
@@ -186,27 +191,40 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, joinBody{
-		SessionID:     item.ID,
-		RoomName:      item.RoomName,
-		CustomerToken: s.minter.ParticipantToken("customer", item.RoomName),
-		Status:        string(item.Status),
-		QueuePosition: positionPtr(s.store.QueuePosition(item.ID)),
-		LiveKitURL:    s.livekitURL,
+		SessionID:      item.ID,
+		RoomName:       item.RoomName,
+		CustomerToken:  s.minter.ParticipantToken("customer", item.RoomName),
+		Status:         string(item.Status),
+		QueuePosition:  positionPtr(s.store.QueuePosition(item.ID)),
+		LiveKitURL:     s.livekitURL,
+		CaptureGuide:   kindString(item.CaptureGuide),
+		MaPrompt:       promptJSON(item.MaPrompt),
+		DigitChallenge: digitJSON(item.DigitChallenge),
 	})
 }
 
-func (s *Server) sessionJSON(item *session.Session) sessionBody {
+func (s *Server) sessionJSON(r *http.Request, item *session.Session) sessionBody {
 	body := sessionBody{
-		ID:            item.ID,
-		JoinURL:       s.customerOrigin + "/join/" + item.JoinToken,
-		JoinToken:     item.JoinToken,
-		Status:        string(item.Status),
-		RoomName:      item.RoomName,
-		CreatedAt:     formatTime(item.CreatedAt),
-		CreatedBy:     item.CreatedBy,
-		ClaimedBy:     nilIfEmpty(item.ClaimedBy),
-		QueuePosition: positionPtr(s.store.QueuePosition(item.ID)),
-		LiveKitURL:    s.livekitURL,
+		ID:               item.ID,
+		JoinURL:          s.customerOrigin + "/join/" + item.JoinToken,
+		JoinToken:        item.JoinToken,
+		Status:           string(item.Status),
+		RoomName:         item.RoomName,
+		CreatedAt:        formatTime(item.CreatedAt),
+		CreatedBy:        item.CreatedBy,
+		ClaimedBy:        nilIfEmpty(item.ClaimedBy),
+		QueuePosition:    positionPtr(s.store.QueuePosition(item.ID)),
+		LiveKitURL:       s.livekitURL,
+		Checklist:        checklistJSON(item.Checklist),
+		CaptureGuide:     kindString(item.CaptureGuide),
+		MaPrompt:         promptJSON(item.MaPrompt),
+		MaAnswers:        answersJSON(item.MaAnswers),
+		DigitChallenge:   digitJSON(item.DigitChallenge),
+		DigitResponse:    item.DigitResponse,
+		DigitRespondedAt: timePtr(item.DigitRespondedAt),
+		MaMatch:          item.MaMatch,
+		DigitMatch:       item.DigitMatch,
+		Captures:         captureListJSON(r, item),
 	}
 	if !item.AcceptedAt.IsZero() {
 		value := formatTime(item.AcceptedAt)
@@ -232,18 +250,28 @@ func (s *Server) claimedJSON(item *session.Session) claimBody {
 }
 
 type sessionBody struct {
-	ID            string  `json:"id"`
-	JoinURL       string  `json:"joinUrl"`
-	JoinToken     string  `json:"joinToken"`
-	Status        string  `json:"status"`
-	RoomName      string  `json:"roomName"`
-	CreatedAt     string  `json:"createdAt"`
-	CreatedBy     string  `json:"createdBy"`
-	ClaimedBy     *string `json:"claimedBy"`
-	QueuePosition *int    `json:"queuePosition"`
-	AcceptedAt    *string `json:"acceptedAt,omitempty"`
-	EndedAt       *string `json:"endedAt,omitempty"`
-	LiveKitURL    string  `json:"livekitUrl"`
+	ID               string          `json:"id"`
+	JoinURL          string          `json:"joinUrl"`
+	JoinToken        string          `json:"joinToken"`
+	Status           string          `json:"status"`
+	RoomName         string          `json:"roomName"`
+	CreatedAt        string          `json:"createdAt"`
+	CreatedBy        string          `json:"createdBy"`
+	ClaimedBy        *string         `json:"claimedBy"`
+	QueuePosition    *int            `json:"queuePosition"`
+	AcceptedAt       *string         `json:"acceptedAt,omitempty"`
+	EndedAt          *string         `json:"endedAt,omitempty"`
+	LiveKitURL       string          `json:"livekitUrl"`
+	Checklist        []checklistBody `json:"checklist"`
+	CaptureGuide     *string         `json:"captureGuide"`
+	MaPrompt         *promptBody     `json:"maPrompt"`
+	MaAnswers        []answerBody    `json:"maAnswers"`
+	DigitChallenge   *digitBody      `json:"digitChallenge"`
+	DigitResponse    *string         `json:"digitResponse"`
+	DigitRespondedAt *string         `json:"digitRespondedAt"`
+	MaMatch          *bool           `json:"maMatch"`
+	DigitMatch       *bool           `json:"digitMatch"`
+	Captures         []captureBody   `json:"captures"`
 }
 
 type claimBody struct {
@@ -257,12 +285,15 @@ type claimBody struct {
 }
 
 type joinBody struct {
-	SessionID     string `json:"sessionId"`
-	RoomName      string `json:"roomName"`
-	CustomerToken string `json:"customerToken"`
-	Status        string `json:"status"`
-	QueuePosition *int   `json:"queuePosition"`
-	LiveKitURL    string `json:"livekitUrl"`
+	SessionID      string      `json:"sessionId"`
+	RoomName       string      `json:"roomName"`
+	CustomerToken  string      `json:"customerToken"`
+	Status         string      `json:"status"`
+	QueuePosition  *int        `json:"queuePosition"`
+	LiveKitURL     string      `json:"livekitUrl"`
+	CaptureGuide   *string     `json:"captureGuide"`
+	MaPrompt       *promptBody `json:"maPrompt"`
+	DigitChallenge *digitBody  `json:"digitChallenge"`
 }
 
 func positionPtr(position int) *int {
