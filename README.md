@@ -2,7 +2,7 @@
 
 ## Company stack (R1) — product path
 
-Go API and two Next.js App Router shells. Session create, join-by-token, the waiting queue, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. Recording, after-call disposition, CRM and datalake stubs, and workforce management beyond a single claim stay on that reference.
+Go API and two Next.js App Router shells. Session create, join-by-token, the waiting queue, claim, accept, and end run here, along with manual authentication, digit liveness, still captures, and the thin checklist. The Express API and the Vite apps (`apps/api`, `apps/agent-dashboard`, `apps/customer-webview`) are **reference only**. New product work does not go there. LiveKit egress and the browser MediaRecorder stay with the WebRTC work. After-call disposition, the recording playback slot, and CRM and datalake stub webhooks are on this Go API and the Next.js agent desk. Workforce management beyond a single claim stays out.
 
 Requires Go 1.23+ and Node.js 20+.
 
@@ -48,7 +48,7 @@ The API listens on `127.0.0.1` only and keeps sessions in memory. It reads a rep
 2. Open a join link (`http://127.0.0.1:3002/join/<token>`). The page says **Waiting for an agent** and the place in line. An unclaimed customer stays there.
 3. On the desk, **Claim** one row, or **Claim next** for the oldest waiting session. That session opens the existing call and the manual-auth desk. The other row stays **Waiting**. Further claims stay disabled until **End session**.
 4. Both windows show the call shell: a remote tile and a local tile (`data-livekit="remote"` and `data-livekit="local"`). With LiveKit credentials and `LIVEKIT_URL`, each shell calls `Room.connect`, publishes its camera and microphone, and shows the other side on the remote tile. Leave both connected for at least 10 seconds. Speak on each side and confirm the other side hears it. Use headphones if both windows are on one machine. Without credentials the token is `lk-stub-…` and the tiles stay on the placeholder. The checklist, questions, digits, and stills on that desk are unchanged.
-5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The customer shows **Session ended** on its next poll. The desk lists that session under **Ended**. The other session is still **Waiting**.
+5. **End session** on either window. That disconnects the LiveKit room and stops the local camera and microphone. The customer shows **Session ended** on its next poll. The agent desk leaves the call and opens after-call work for that session. The other session is still **Waiting**.
 
 ### HTTP flow
 
@@ -82,16 +82,21 @@ When `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set, those tokens are LiveKi
 | `POST` | `/sessions/:id/end` | `{ status: "ended", sessionId }` |
 | `GET` | `/join/:token` | `{ sessionId, roomName, customerToken, status, queuePosition, livekitUrl, captureGuide, maPrompt, digitChallenge }` |
 | `POST` | `/join/:token/replies` | customer `answer` and/or `digitResponse` while the call is open |
-| `PATCH` | `/sessions/:id` | `checklist`, `captureGuide`, `maPrompt`, `digitChallenge`, `maMatch`, `digitMatch` |
+| `PATCH` | `/sessions/:id` | checklist, prompts, matches, `acwNotes`, `disposition` |
 | `POST` | `/sessions/:id/captures` | JSON `{ image, kind }` JPEG or PNG, 4 MB |
+| `GET` | `/sessions/:id/captures` | still summaries for after-call work, no bytes |
 | `GET` | `/sessions/:id/captures/:captureId` | JPEG or PNG bytes |
+| `POST` | `/sessions/:id/recording` | attach `recordingUrl` and/or `recordingId` |
+| `POST` | `/sessions/:id/call-recording` | local WebM or MP4, 40 MB, playback URL in the response |
+| `GET` | `/sessions/:id/call-recording/file.webm` or `file.mp4` | those bytes |
+| `GET` | `/disposition-stubs` | stored CRM and datalake request bodies |
 | `GET` | `/health` | `{ ok: true, service: "vkyc-api", stack: "go" }` |
 
 CORS allows the Next.js origins (`127.0.0.1` and `localhost` on ports 3000 and 3002) and the Vite reference origins. Methods are `GET`, `POST`, `PATCH`, and `OPTIONS`. `OPTIONS` returns 204.
 
 ## R2 manual authentication
 
-The agent drives the questions from the in-call desk. The customer poll (`GET /join/:token`, about every 1.5s) returns the active prompt. The customer posts a reply. The desk poll (`GET /sessions/:id`, about every 2s) shows the log. Pass and fail are booleans on the session. They do not call a bureau, OCR, or liveness model. Approve, Reject, UTV, ACW notes, recording, CRM, and datalake are not on this API.
+The agent drives the questions from the in-call desk. The customer poll (`GET /join/:token`, about every 1.5s) returns the active prompt. The customer posts a reply. The desk poll (`GET /sessions/:id`, about every 2s) shows the log. Pass and fail are booleans on the session. They do not call a bureau, OCR, or liveness model. Approve, Reject, UTV, ACW notes, the recording slot, and the CRM and datalake stubs are the after-call desk in R4. They are not part of this in-call flow.
 
 A new session has `maPrompt: null`, `maAnswers: []`, `digitChallenge: null`, `digitResponse: null`, `digitRespondedAt: null`, `maMatch: null`, `digitMatch: null`, `captureGuide: null`, and three unchecked checklist items: `identity_match`, `liveness_digits`, `docs_shown`.
 
@@ -122,7 +127,7 @@ The customer posts `{ "digitResponse": "4821" }` (digits and spaces, 16 characte
 
 Changing **Kind** sets `captureGuide`. The customer card outline and the line “align ID inside the box” stay on only while the guide is `id`. **Capture still** grabs one JPEG from the remote customer tile (`video[data-livekit="remote"]`) when that frame is live. **Add still** uploads a JPEG or PNG data URL, which is enough when cameras are off. An `id`, `selfie_ktp`, or `other` still checks **Documents shown**. A face still does not. A session stores at most 20 stills.
 
-The thin disposition of the call is those three checklist ticks plus the two stub toggles. There is no Approve, Reject, or UTV on this desk.
+The thin in-call record is those three checklist ticks plus the two stub toggles. Approve, Reject, and UTV are on the after-call desk, after End session.
 
 ### QA
 
@@ -165,7 +170,7 @@ curl -s http://127.0.0.1:3001/sessions/$ID | jq '{maAnswers,digitResponse,maMatc
 
 The log stays in first-asked order: full name `Ayu Prameswari`, date of birth `1-1-1` (the re-ask replaced `1994-03-15`), mother's maiden name `Wijaya`. `digitResponse` is `4821`. Identity match and liveness are checked. Captures are `selfie_ktp` and `other`, and **Documents shown** is checked. A face still does not check it.
 
-On the desk, open the customer join link, accept the session, and repeat the questions from **Manual authentication**. The customer page shows the prompt and a reply field. Set **Kind** to **ID** and the customer camera frame shows the card outline. **Face**, **Selfie + KTP**, or **Extra doc** removes it. **End session** still closes the LiveKit call. There is no after-call disposition screen.
+On the desk, open the customer join link, accept the session, and repeat the questions from **Manual authentication**. The customer page shows the prompt and a reply field. Set **Kind** to **ID** and the customer camera frame shows the card outline. **Face**, **Selfie + KTP**, or **Extra doc** removes it. **End session** closes the LiveKit call and opens the after-call desk.
 
 Mint lives in `apps/go-api/internal/livekit`. Browser `Room.connect`, publish, subscribe, and End teardown live only in `packages/vkyc-livekit`. The agent and customer shells call `useCallMedia` and do not open a second room.
 
@@ -177,15 +182,15 @@ pnpm --filter @vkyc/agent-next --filter @vkyc/customer-next --filter @vkyc/livek
 ### Layout
 
 ```
-apps/go-api            Go session API, in-memory store, LiveKit JWT mint, waiting queue, manual auth, stills
-apps/agent-next        Next.js agent desk (queue, claim, prompts, captures, end)
+apps/go-api            Go session API, in-memory store, LiveKit JWT mint, queue, manual auth, stills, ACW
+apps/agent-next        Next.js agent desk (queue, claim, prompts, captures, end, after-call work)
 apps/customer-next     Next.js customer join (enter queue, token link, prompts, ID guide, end)
 packages/vkyc-livekit  livekit-client connect hook shared by both shells
 ```
 
 ## R3 waiting queue
 
-Inbound sessions wait until an agent claims exactly one of them. Claim and accept open the existing call and the manual-auth desk (questions, digits, checklist, stills). Ending a session does not touch the rest of the queue. Statuses on this desk are **Waiting**, **In call**, and **Ended**. There is no Approve, Reject, UTV, recording, CRM, or Escalate.
+Inbound sessions wait until an agent claims exactly one of them. Claim and accept open the existing call and the manual-auth desk (questions, digits, checklist, stills). Ending a session does not touch the rest of the queue. Statuses on this desk are **Waiting**, **In call**, and **Ended**. Approve, Reject, UTV, the recording slot, and CRM stubs are the after-call desk in R4. Escalate is out of scope.
 
 A customer enters from the customer app (**Enter the queue**), or the desk **Create session** does the same thing. Neither path starts the call. While the desk is in a call, **Claim** and **Claim next** stay disabled, and every other waiting session remains in the list.
 
@@ -205,6 +210,61 @@ curl -s http://127.0.0.1:3001/sessions?status=waiting
 ```
 
 The first curl pair leaves two `waiting` sessions, oldest first, with `queuePosition` 1 and 2. Claim moves Ayu to `in_call` and returns `agentToken`. The waiting list is then only Budi, at position 1. A second accept of Ayu is `409`. `GET /join/<budi token>` stays `waiting`.
+
+## R4 after-call work
+
+**End session** leaves the call stage and opens after-call work for that session. The same stills are on that desk. **Call recording** shows a play or download link when a recording URL is attached, and a player when the URL ends in a video or audio extension. Until then it says “No recording attached yet”. Approve, Reject, and UTV stay disabled until at least one still exists. Picking one stores `approve`, `reject`, or `utv` on the session and sends a CRM stub and a datalake stub. **Open ACW** on an ended row shows the same disposition, notes, stills, and recording link after refresh. **Back to queue** closes the desk. Claiming another session also closes it. Escalate is not on this desk.
+
+A disposition is saved only after the session has ended and at least one still exists. Before that, `PATCH` returns `409` (call still open) or `422` with `error: "capture_required"`. Notes are `acwNotes`, 4000 characters, and can be saved during the call. `null` clears a disposition and does not send another stub. A notes-only patch does not send one either. Sending the same disposition again sends the stubs again.
+
+Each stub body is logged on the API process, appended to `DISPOSITION_STUB_LOG_PATH` (default `data/disposition-stubs.jsonl` from the repo root), and kept in memory. `GET /disposition-stubs` returns that memory, oldest first. `?sessionId=` limits it to one session. When `CRM_STUB_WEBHOOK_URL` or `DATALAKE_STUB_WEBHOOK_URL` is set, that sink is also POSTed the same JSON. A failed POST is stored with `webhookError` and the disposition response stays `200`.
+
+```bash
+export CUSTOMER_APP_ORIGIN=http://127.0.0.1:3002
+# Go API already running on 127.0.0.1:3001
+
+ID=$(curl -s -X POST http://127.0.0.1:3001/sessions -H 'content-type: application/json' -H 'x-demo-agent: Desk 1' -d '{}' | jq -r .id)
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/accept -H 'x-demo-agent: Desk 1' >/dev/null
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/captures -H 'content-type: application/json' \
+  -d '{"image":"/9j/2Q==","kind":"face"}' >/dev/null
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/end >/dev/null
+curl -s -X POST http://127.0.0.1:3001/sessions/$ID/recording -H 'content-type: application/json' \
+  -d '{"recordingUrl":"https://egress.example/vkyc/call.mp4","recordingId":"EG_call"}' >/dev/null
+curl -s -X PATCH http://127.0.0.1:3001/sessions/$ID -H 'content-type: application/json' -H 'x-demo-agent: Desk 1' \
+  -d '{"disposition":"Approve","acwNotes":"Face still matches."}'
+curl -s http://127.0.0.1:3001/disposition-stubs?sessionId=$ID
+```
+
+The patch returns `disposition: "approve"`. The evidence endpoint returns two objects, `sink` `crm` and `sink` `datalake`, with that disposition, the still, and `recording.id` / `recording.url`. The same two lines are in `data/disposition-stubs.jsonl`.
+
+### For vkyc webrtc — recording attach
+
+This API does not start LiveKit egress or a browser `MediaRecorder`. Two hooks are enough for the desk to show a link and a player once a file exists.
+
+Attach a URL or id. At least one field is required. An omitted field stays as it is. `recordingUrl` is `http` or `https`, 2048 characters max. `recordingId` is trimmed, 200 characters max. Any session status is accepted. `200` returns the session.
+
+```http
+POST /sessions/:id/recording
+Content-Type: application/json
+
+{
+  "recordingUrl": "https://egress.example/vkyc/call.mp4",
+  "recordingId": "EG_call"
+}
+```
+
+Attach a local WebM or MP4 when the bytes themselves should be playable from this API. `201` returns `{ "recordingId": "local_…", "recordingUrl": "http://<api-host>/sessions/<id>/call-recording/file.webm" }`. A shorter upload does not replace a longer one. `GET` that URL returns the bytes.
+
+```http
+POST /sessions/:id/call-recording
+Content-Type: video/webm
+
+<bytes>
+```
+
+The same route accepts `multipart/form-data` with a `video` part of type `video/webm` or `video/mp4`. The limit is 40 MB.
+
+`GET /sessions/:id/captures` lists the still summaries already present on `GET /sessions/:id` (`id`, `url`, `path`, `kind`, `contentType`, `createdAt`, `capturedAt`) and does not include the image bytes.
 
 ## Reference stack (Express + Vite)
 

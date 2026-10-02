@@ -17,6 +17,7 @@ import {
 
 const POLL_MS = 2000;
 const NAME_KEY = "vkyc.agentName";
+const ACW_KEY = "vkyc.acw";
 
 function readName(): string {
   try {
@@ -24,6 +25,22 @@ function readName(): string {
   } catch {
     return "Demo agent";
   }
+}
+
+function writeAcw(id: string | null) {
+  try {
+    if (id) sessionStorage.setItem(ACW_KEY, id);
+    else sessionStorage.removeItem(ACW_KEY);
+  } catch {
+    /* The desk still keeps the id in memory. */
+  }
+}
+
+function dispositionLabel(value: Session["disposition"]): string {
+  if (value === "approve") return "Approve";
+  if (value === "reject") return "Reject";
+  if (value === "utv") return "UTV";
+  return "No disposition";
 }
 
 function shortId(id: string): string {
@@ -112,9 +129,16 @@ export default function DeskPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [acwId, setAcwId] = useState<string | null>(null);
 
   useEffect(() => {
     setName(readName());
+    try {
+      const stored = sessionStorage.getItem(ACW_KEY);
+      if (stored) setAcwId(stored);
+    } catch {
+      /* Refresh still loads the queue. */
+    }
   }, []);
 
   useEffect(() => {
@@ -155,8 +179,11 @@ export default function DeskPage() {
     if (!call) return;
     const row = sessions.find((session) => session.id === call.sessionId);
     if (row?.status === "ended") {
+      const sessionId = call.sessionId;
       setCall(null);
-      setNotice(`Session ${shortId(call.sessionId)} ended.`);
+      setAcwId(sessionId);
+      writeAcw(sessionId);
+      setNotice("Session ended. Finish after-call work: notes, stills, and a disposition.");
     }
   }, [sessions, call]);
 
@@ -218,15 +245,48 @@ export default function DeskPage() {
           busy={busy === "end"}
           onEnd={() =>
             void run("end", async () => {
-              await endSession(call.sessionId, agent);
+              const sessionId = call.sessionId;
+              await endSession(sessionId, agent);
               setCall(null);
-              setNotice(`Session ${shortId(call.sessionId)} ended.`);
+              setAcwId(sessionId);
+              writeAcw(sessionId);
+              setNotice("Session ended. Finish after-call work: notes, stills, and a disposition.");
               await refresh();
             })
           }
         />
-        <KycDesk sessionId={call.sessionId} agentName={agent} />
+        <KycDesk sessionId={call.sessionId} agentName={agent} phase="call" />
         </>
+      ) : null}
+
+      {acwId && !call ? (
+        <section className="acw-shell" data-acw={acwId}>
+          <div className="panel">
+          <div className="call-head">
+            <div>
+              <h2>After-call work</h2>
+              <p className="meta">
+                {sessionLabel(
+                  sessions.find((session) => session.id === acwId) ?? { id: acwId, displayName: null },
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="ghost"
+              data-action="close-acw"
+              onClick={() => {
+                setAcwId(null);
+                writeAcw(null);
+                setNotice(null);
+              }}
+            >
+              Back to queue
+            </button>
+          </div>
+          </div>
+          <KycDesk sessionId={acwId} agentName={agent} phase="acw" />
+        </section>
       ) : null}
 
       <section className="panel" aria-labelledby="queue-heading">
@@ -260,6 +320,8 @@ export default function DeskPage() {
                 void run("claim", async () => {
                   const claimed = await claimNextSession(agent);
                   setCall(claimed);
+                  setAcwId(null);
+                  writeAcw(null);
                   setNotice(null);
                   await refresh();
                 })
@@ -314,6 +376,8 @@ export default function DeskPage() {
                       void run(`accept:${session.id}`, async () => {
                         const claimed = await acceptSession(session.id, agent);
                         setCall(claimed);
+                        setAcwId(null);
+                        writeAcw(null);
                         setNotice(null);
                         await refresh();
                       })
@@ -334,9 +398,24 @@ export default function DeskPage() {
                 <li className="row" key={session.id} data-session-id={session.id} data-status="ended">
                   <div className="queue-lead">
                     <StatusPill status="ended" />
+                    {session.disposition ? (
+                      <span className={`pill pill-${session.disposition}`}>{dispositionLabel(session.disposition)}</span>
+                    ) : null}
                     <strong>{sessionLabel(session)}</strong>
                     <span className="meta">{shortId(session.id)}</span>
                   </div>
+                  <button
+                    type="button"
+                    className="ghost"
+                    data-action="open-acw"
+                    onClick={() => {
+                      setAcwId(session.id);
+                      writeAcw(session.id);
+                      setNotice(null);
+                    }}
+                  >
+                    Open ACW
+                  </button>
                 </li>
               ))}
             </ul>
