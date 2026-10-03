@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { ApiError, createCustomerSession, fetchJoin, postJoinReply, type JoinInfo } from "./api";
 import { useLiveKit } from "./livekit";
+import { postCustomerEvent } from "./wk-bridge";
 
 const POLL_MS = 1500;
 
@@ -157,6 +158,19 @@ function JoinScreen({ token }: { token: string }) {
     info?.status === "in_call" ? info.roomName : null,
     info?.status === "in_call" ? info.customerToken : null,
   );
+
+  useEffect(() => {
+    if (fatal) postCustomerEvent("error", fatal);
+  }, [fatal]);
+
+  useEffect(() => {
+    if (info?.status === "ended") postCustomerEvent("ended");
+  }, [info?.status]);
+
+  useEffect(() => {
+    if (media?.mediaConnected) postCustomerEvent("connected");
+    if (media?.mediaError) postCustomerEvent("error", media.mediaError);
+  }, [media?.mediaConnected, media?.mediaError]);
 
   if (fatal) {
     return (

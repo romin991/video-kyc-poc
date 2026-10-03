@@ -5,7 +5,8 @@ import WebKit
 ///
 /// Camera and microphone stay on that page's LiveKit path. The page posts
 /// `connected`, `ended`, and `error` to the `vkyc` script handler
-/// (`apps/customer-next/src/lib/wk-bridge.ts`).
+/// (`apps/customer-webview/src/wk-bridge.ts` on the live Vite host, and the
+/// same payloads from `apps/customer-next/src/lib/wk-bridge.ts`).
 public enum VKYCCustomer {
     /// Script message handler the customer page calls.
     public static let scriptHandlerName = "vkyc"
