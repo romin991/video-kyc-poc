@@ -185,6 +185,7 @@ pnpm --filter @vkyc/agent-next --filter @vkyc/customer-next --filter @vkyc/livek
 apps/go-api            Go session API, in-memory store, LiveKit JWT mint, queue, manual auth, stills, ACW
 apps/agent-next        Next.js agent desk (queue, claim, prompts, captures, end, after-call work)
 apps/customer-next     Next.js customer join (enter queue, token link, prompts, ID guide, end)
+apps/ios-customer      Swift customer SDK. WKWebView loads the Next join URL. See that README.
 packages/vkyc-livekit  livekit-client connect hook shared by both shells
 ```
 
