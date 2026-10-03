@@ -19,7 +19,7 @@ struct DemoView: View {
                 .foregroundStyle(.secondary)
             TextField("\(localCustomerOrigin)/join/<token>", text: $joinURL)
                 .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+                .disableAutocorrection(true)
                 .keyboardType(.URL)
                 .textContentType(.URL)
                 .textFieldStyle(.roundedBorder)
