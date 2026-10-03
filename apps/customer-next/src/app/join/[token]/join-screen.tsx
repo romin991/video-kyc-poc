@@ -97,7 +97,7 @@ function InCall({ info, token, onEnded }: { info: JoinInfo; token: string; onEnd
       postCustomerEvent("connected");
       if (media.error) postCustomerEvent("error", media.error);
     } else if (media.phase === "error") {
-      postCustomerEvent("error", media.error ?? media.detail || "LiveKit connect failed");
+      postCustomerEvent("error", media.error ?? (media.detail || "LiveKit connect failed"));
     }
   }, [media.phase, media.error, media.detail]);
 
