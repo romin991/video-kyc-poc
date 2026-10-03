@@ -2,8 +2,8 @@ import SuperbankVKYC
 import SwiftUI
 import UIKit
 
-/// Local Next.js customer app. Paste a full join URL over this origin.
-private let localCustomerOrigin = "http://127.0.0.1:3002"
+/// Live Vite customer app. Paste a full join URL from the public agent desk.
+private let customerOrigin = "https://vkyc-customer.vercel.app"
 
 struct DemoView: View {
     @State private var joinURL = ""
@@ -14,10 +14,10 @@ struct DemoView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Superbank Video KYC")
                 .font(.title2.bold())
-            Text("Customer app defaults to \(localCustomerOrigin) until a public join URL exists. Paste the full join URL from the agent desk.")
+            Text("Create the session on https://vkyc-agent.vercel.app and paste that customer join URL. It looks like \(customerOrigin)/join/<token>.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            TextField("\(localCustomerOrigin)/join/<token>", text: $joinURL)
+            TextField("\(customerOrigin)/join/<token>", text: $joinURL)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
                 .keyboardType(.URL)

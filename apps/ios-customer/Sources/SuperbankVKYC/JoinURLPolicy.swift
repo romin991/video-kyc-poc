@@ -9,7 +9,7 @@ extension VKYCCustomer {
     public static func rejectionMessage(for joinURL: String) -> String? {
         let trimmed = joinURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            return "Paste a join URL. The local customer app is http://127.0.0.1:3002/join/<token>."
+            return "Paste a join URL. The customer app is https://vkyc-customer.vercel.app/join/<token>."
         }
         guard let parts = URL(string: trimmed),
               let scheme = parts.scheme?.lowercased(),
