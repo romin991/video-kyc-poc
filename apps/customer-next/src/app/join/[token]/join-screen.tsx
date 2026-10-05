@@ -3,6 +3,7 @@
 import { useCallMedia } from "@vkyc/livekit";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, endSession, fetchJoin, postJoinReply, serverUrlFor, type DigitChallenge, type JoinInfo, type MaPrompt } from "@/lib/api";
+import { postCustomerEvent } from "@/lib/wk-bridge";
 
 const POLL_MS = 1500;
 
@@ -91,6 +92,15 @@ function InCall({ info, token, onEnded }: { info: JoinInfo; token: string; onEnd
     if (maPrompt || digitChallenge) setReplyNote(null);
   }, [maPrompt, digitChallenge]);
 
+  useEffect(() => {
+    if (media.phase === "connected") {
+      postCustomerEvent("connected");
+      if (media.error) postCustomerEvent("error", media.error);
+    } else if (media.phase === "error") {
+      postCustomerEvent("error", media.error ?? (media.detail || "LiveKit connect failed"));
+    }
+  }, [media.phase, media.error, media.detail]);
+
   return (
       <div className="call" data-call="active" data-status="in_call" data-room-name={info.roomName} data-call-phase={media.phase}>
       <div className="call-head">
@@ -109,8 +119,10 @@ function InCall({ info, token, onEnded }: { info: JoinInfo; token: string; onEnd
             void endSession(info.sessionId)
               .then(() => onEnded())
               .catch((err: unknown) => {
-                setError(err instanceof Error ? err.message : "Could not end the session.");
+                const message = err instanceof Error ? err.message : "Could not end the session.";
+                setError(message);
                 setBusy(false);
+                postCustomerEvent("error", message);
               });
           }}
         >
@@ -258,6 +270,14 @@ export function JoinScreen({ token }: { token: string }) {
     void loop();
     return () => stop();
   }, [token]);
+
+  useEffect(() => {
+    if (fatal) postCustomerEvent("error", fatal);
+  }, [fatal]);
+
+  useEffect(() => {
+    if (info?.status === "ended") postCustomerEvent("ended");
+  }, [info?.status]);
 
   let body: ReactNode;
   if (fatal) {
