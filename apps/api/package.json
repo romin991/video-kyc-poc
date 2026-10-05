@@ -7,9 +7,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/http.test.ts src/queue.test.ts src/tokens.test.ts src/wave1.test.ts src/wave3.test.ts src/wave4.test.ts src/recording.test.ts src/callMediaRelease.test.ts"
+    "test": "tsx --test src/http.test.ts src/queue.test.ts src/tokens.test.ts src/redis-session-store.test.ts src/wave1.test.ts src/wave3.test.ts src/wave4.test.ts src/recording.test.ts src/callMediaRelease.test.ts"
   },
   "dependencies": {
+    "@upstash/redis": "^1.39.0",
     "dotenv": "^18.0.4",
     "express": "^4.21.2",
     "livekit-server-sdk": "^2.19.1",

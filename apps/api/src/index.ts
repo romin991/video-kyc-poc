@@ -3,20 +3,25 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app.js";
 import { createCallRecorderFromEnv } from "./recording.js";
+import { createSessionStoreFromEnv } from "./redis-session-store.js";
 import { describeStubDelivery, resolveStubConfig } from "./stubs.js";
+import { useParticipantTokenCache } from "./tokens.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(here, "../../../.env") });
 
 const port = Number(process.env.PORT ?? 3001);
 const recording = createCallRecorderFromEnv();
-const app = createApp(undefined, { log: true, recording });
+const sessions = createSessionStoreFromEnv(process.env);
+if (sessions.tokenCache) useParticipantTokenCache(sessions.tokenCache);
+const app = createApp(sessions.store, { log: true, recording });
 
 app.listen(port, "127.0.0.1", () => {
   const customerOrigin = process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
   const liveKitUrl = process.env.LIVEKIT_URL?.trim();
   const liveKitReady = Boolean(process.env.LIVEKIT_API_KEY?.trim() && process.env.LIVEKIT_API_SECRET?.trim());
   console.log(`vkyc api  http://127.0.0.1:${port}`);
+  console.log(sessions.description);
   console.log(`join urls use ${customerOrigin}`);
   if (liveKitReady) {
     console.log(
