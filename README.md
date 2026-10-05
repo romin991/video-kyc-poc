@@ -312,7 +312,7 @@ pnpm dev:agent
 pnpm dev:customer
 ```
 
-The API keeps sessions, checklist, notes, disposition, and stills in memory. Restarting it drops them and invalidates open join links.
+With `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` unset, the API keeps sessions, checklist, notes, disposition, and stills in memory. Restarting it drops them and invalidates open join links. Set both on the Vercel `vkyc-api` project (or `KV_REST_API_URL` and `KV_REST_API_TOKEN`) and every instance reads the same session from create through claim, join, and end. Optional `VKYC_REDIS_PREFIX` (default `vkyc`) and `VKYC_SESSION_TTL_SECONDS` (default 7 days) scope those keys. Stills up to 4MB are stored in Redis. Fallback call-recording files stay on the instance that received the upload. Local `pnpm dev` leaves the Upstash variables unset.
 
 ## LiveKit
 

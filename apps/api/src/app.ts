@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import multer from "multer";
 import { decodeImage, parseCaptureMeta, parseCustomerReply, parseOnboarding, parsePatch, parseRecordingAttach } from "./kyc.js";
 import type { CallRecorder } from "./recording.js";
-import { SessionStore } from "./sessions.js";
+import { SessionStore, type SessionStoreApi } from "./sessions.js";
 import { deliverDispositionStubs, resolveStubConfig, type DispositionStubBody, type StubOverrides } from "./stubs.js";
 import { participantToken } from "./tokens.js";
 import type { CaptureRecord, Disposition, Session, SessionResponse, SessionStatus } from "./types.js";
@@ -148,6 +148,14 @@ function sendError(res: Response, status: number, error: string, message: string
   res.status(status).json({ error, message });
 }
 
+function route(
+  handler: (req: Request, res: Response) => Promise<void>,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    handler(req, res).catch(next);
+  };
+}
+
 async function claimedCall(session: Session, origin: string) {
   return {
     sessionId: session.id,
@@ -247,7 +255,7 @@ function isPayloadTooLarge(error: unknown): boolean {
  * maAnswers (one row per field; a new reply replaces that field) and
  * digitResponse. maMatch and digitMatch are agent stub toggles.
  */
-export function createApp(store = new SessionStore(), options: AppOptions = {}): express.Express {
+export function createApp(store: SessionStoreApi = new SessionStore(), options: AppOptions = {}): express.Express {
   const origin = options.customerAppOrigin ?? process.env.CUSTOMER_APP_ORIGIN ?? "http://localhost:5174";
   const corsOrigins = options.corsOrigins ?? readList(process.env.CORS_ORIGINS, DEFAULT_CORS);
   const stubs = resolveStubConfig(process.env, options.stubs);
@@ -292,44 +300,51 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.json({ ok: true, service: "vkyc-api" });
   });
 
-  app.post("/sessions", (req, res) => {
+  async function sendSession(req: Request, res: Response, session: Session, statusCode = 200): Promise<void> {
+    res.status(statusCode).json(toResponse(req, session, origin, await store.queuePosition(session.id)));
+  }
+
+  app.post("/sessions", route(async (req, res) => {
     const onboarding = parseOnboarding(req.body ?? {});
     if (!onboarding.ok) {
       sendError(res, 400, "bad_request", onboarding.message);
       return;
     }
-    const session = store.create(demoAgent(req), onboarding.value);
-    res.status(201).json(toResponse(req, session, origin, store.queuePosition(session.id)));
-  });
+    const session = await store.create(demoAgent(req), onboarding.value);
+    await sendSession(req, res, session, 201);
+  }));
 
-  app.get("/sessions", (req, res) => {
+  app.get("/sessions", route(async (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     if (status && !STATUSES.includes(status as SessionStatus)) {
       sendError(res, 400, "bad_request", "status must be waiting, in_call, or ended");
       return;
     }
-    const sessions = store
-      .list(status as SessionStatus | undefined)
-      .map((session) => toResponse(req, session, origin, store.queuePosition(session.id)));
-    res.json({ sessions });
-  });
+    const sessions = await store.list(status as SessionStatus | undefined);
+    const waiting =
+      status === "waiting" ? sessions : status === "in_call" || status === "ended" ? [] : await store.list("waiting");
+    const positions = new Map(waiting.map((session, index) => [session.id, index + 1]));
+    res.json({
+      sessions: sessions.map((session) => toResponse(req, session, origin, positions.get(session.id) ?? null)),
+    });
+  }));
 
-  app.get("/sessions/:id", (req, res) => {
-    const session = store.get(req.params.id);
+  app.get("/sessions/:id", route(async (req, res) => {
+    const session = await store.get(req.params.id);
     if (!session) {
       sendError(res, 404, "not_found", "Session not found");
       return;
     }
-    res.json(toResponse(req, session, origin, store.queuePosition(session.id)));
-  });
+    await sendSession(req, res, session);
+  }));
 
-  app.patch("/sessions/:id", async (req, res) => {
+  app.patch("/sessions/:id", route(async (req, res) => {
     const patch = parsePatch(req.body ?? {});
     if (!patch.ok) {
       sendError(res, 400, "bad_request", patch.message);
       return;
     }
-    const result = store.update(req.params.id, patch.value);
+    const result = await store.update(req.params.id, patch.value);
     if (!result.ok && result.error === "not_found") {
       sendError(res, 404, "not_found", result.message);
       return;
@@ -350,24 +365,24 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     if (disposition) {
       await deliverDispositionStubs(stubBody(req, result.session, demoAgent(req), disposition), stubs);
     }
-    res.json(toResponse(req, result.session, origin, store.queuePosition(result.session.id)));
-  });
+    await sendSession(req, res, result.session);
+  }));
 
-  app.post("/sessions/:id/recording", (req, res) => {
+  app.post("/sessions/:id/recording", route(async (req, res) => {
     const parsed = parseRecordingAttach(req.body ?? {});
     if (!parsed.ok) {
       sendError(res, 400, "bad_request", parsed.message);
       return;
     }
-    const result = store.attachRecording(req.params.id, parsed.value);
+    const result = await store.attachRecording(req.params.id, parsed.value);
     if (!result.ok) {
       sendError(res, 404, "not_found", result.message);
       return;
     }
-    res.json(toResponse(req, result.session, origin, store.queuePosition(result.session.id)));
-  });
+    await sendSession(req, res, result.session);
+  }));
 
-  app.post("/sessions/:id/captures", captureParser, (req, res) => {
+  app.post("/sessions/:id/captures", captureParser, route(async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const file = (req as Request & { file?: { buffer?: Buffer } }).file;
     const decoded = file?.buffer
@@ -386,7 +401,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       return;
     }
 
-    const result = store.addCapture(req.params.id, {
+    const result = await store.addCapture(req.params.id, {
       bytes: decoded.bytes,
       contentType: decoded.contentType,
       kind: meta.value.kind,
@@ -401,10 +416,10 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       return;
     }
     res.status(201).json(toCapture(req, result.session.id, result.capture));
-  });
+  }));
 
-  app.get("/sessions/:id/captures/:captureId", (req, res) => {
-    const found = store.getCapture(req.params.id, req.params.captureId);
+  app.get("/sessions/:id/captures/:captureId", route(async (req, res) => {
+    const found = await store.getCapture(req.params.id, req.params.captureId);
     if (!found) {
       sendError(res, 404, "not_found", "Capture not found");
       return;
@@ -412,10 +427,10 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.setHeader("Content-Type", found.capture.contentType);
     res.setHeader("Content-Length", String(found.bytes.length));
     res.send(found.bytes);
-  });
+  }));
 
-  app.post("/sessions/claim", async (req, res) => {
-    const result = store.claimNext(demoAgent(req));
+  app.post("/sessions/claim", route(async (req, res) => {
+    const result = await store.claimNext(demoAgent(req));
     if (!result.ok && result.error === "empty") {
       sendError(res, 409, "conflict", "No session is waiting in the queue");
       return;
@@ -435,10 +450,10 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     }
     recording?.onInCall({ id: result.session.id, roomName: result.session.roomName });
     res.json(await claimedCall(result.session, origin));
-  });
+  }));
 
-  app.post("/sessions/:id/accept", async (req, res) => {
-    const result = store.accept(req.params.id, demoAgent(req));
+  app.post("/sessions/:id/accept", route(async (req, res) => {
+    const result = await store.accept(req.params.id, demoAgent(req));
     if (!result.ok && result.error === "not_found") {
       sendError(res, 404, "not_found", "Session not found");
       return;
@@ -454,10 +469,10 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     }
     recording?.onInCall({ id: result.session.id, roomName: result.session.roomName });
     res.json(await claimedCall(result.session, origin));
-  });
+  }));
 
-  app.post("/sessions/:id/end", (req, res) => {
-    const result = store.end(req.params.id);
+  app.post("/sessions/:id/end", route(async (req, res) => {
+    const result = await store.end(req.params.id);
     if (!result.ok) {
       sendError(res, 404, "not_found", "Session not found");
       return;
@@ -468,19 +483,19 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       });
     }
     res.json({ status: "ended" as const, sessionId: result.session.id });
-  });
+  }));
 
-  app.get("/sessions/:id/call-recording", (req, res) => {
-    const session = store.get(req.params.id);
+  app.get("/sessions/:id/call-recording", route(async (req, res) => {
+    const session = await store.get(req.params.id);
     if (!session) {
       sendError(res, 404, "not_found", "Session not found");
       return;
     }
     res.json(recording?.status(session.id) ?? { mode: "off" as const, recordingId: null });
-  });
+  }));
 
-  app.post("/sessions/:id/call-recording", videoUpload.single("video"), (req, res) => {
-    const session = store.get(req.params.id);
+  app.post("/sessions/:id/call-recording", videoUpload.single("video"), route(async (req, res) => {
+    const session = await store.get(req.params.id);
     if (!session) {
       sendError(res, 404, "not_found", "Session not found");
       return;
@@ -501,20 +516,18 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     }
     const ext = contentType === "video/mp4" ? "mp4" : "webm";
     const recordingUrl = `${req.protocol}://${req.get("host") ?? "localhost:3001"}/sessions/${session.id}/call-recording/file.${ext}`;
-    void recording
-      .saveFallback(session.id, { bytes: file.buffer, contentType, recordingUrl })
-      .then((saved) => {
-        if (!saved.ok) {
-          sendError(res, saved.status, saved.status === 400 ? "bad_request" : "conflict", saved.message);
-          return;
-        }
-        res.status(201).json({ recordingId: saved.recordingId, recordingUrl: saved.recordingUrl });
-      })
-      .catch((error: unknown) => {
-        console.error("[vkyc] fallback recording failed", error instanceof Error ? error.message : error);
-        if (!res.headersSent) sendError(res, 500, "error", "Could not store the call recording");
-      });
-  });
+    try {
+      const saved = await recording.saveFallback(session.id, { bytes: file.buffer, contentType, recordingUrl });
+      if (!saved.ok) {
+        sendError(res, saved.status, saved.status === 400 ? "bad_request" : "conflict", saved.message);
+        return;
+      }
+      res.status(201).json({ recordingId: saved.recordingId, recordingUrl: saved.recordingUrl });
+    } catch (error) {
+      console.error("[vkyc] fallback recording failed", error instanceof Error ? error.message : error);
+      if (!res.headersSent) sendError(res, 500, "error", "Could not store the call recording");
+    }
+  }));
 
   app.get("/sessions/:id/call-recording/file.:ext", (req, res) => {
     const file = recording?.fallbackFile(req.params.id);
@@ -528,8 +541,8 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
     res.send(file.bytes);
   });
 
-  app.get("/join/:token", async (req, res) => {
-    const session = store.getByToken(req.params.token);
+  app.get("/join/:token", route(async (req, res) => {
+    const session = await store.getByToken(req.params.token);
     if (!session) {
       sendError(res, 404, "not_found", "Join link not found");
       return;
@@ -540,14 +553,14 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       customerToken: await participantToken("customer", session.roomName),
       status: session.status,
       captureGuide: session.captureGuide,
-      queuePosition: store.queuePosition(session.id),
+      queuePosition: await store.queuePosition(session.id),
       maPrompt: session.maPrompt ? { ...session.maPrompt } : null,
       digitChallenge: session.digitChallenge ? { ...session.digitChallenge } : null,
     });
-  });
+  }));
 
-  app.post("/join/:token/replies", (req, res) => {
-    const session = store.getByToken(req.params.token);
+  app.post("/join/:token/replies", route(async (req, res) => {
+    const session = await store.getByToken(req.params.token);
     if (!session) {
       sendError(res, 404, "not_found", "Join link not found");
       return;
@@ -557,7 +570,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 400, "bad_request", parsed.message);
       return;
     }
-    const result = store.recordReply(session.id, parsed.value);
+    const result = await store.recordReply(session.id, parsed.value);
     if (!result.ok && result.error === "not_found") {
       sendError(res, 404, "not_found", result.message);
       return;
@@ -575,7 +588,7 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       maPrompt: result.session.maPrompt ? { ...result.session.maPrompt } : null,
       digitChallenge: result.session.digitChallenge ? { ...result.session.digitChallenge } : null,
     });
-  });
+  }));
 
   app.use((_req, res) => {
     sendError(res, 404, "not_found", "Route not found");
@@ -604,7 +617,12 @@ export function createApp(store = new SessionStore(), options: AppOptions = {}):
       sendError(res, 413, "payload_too_large", "Image must be 4 MB or smaller");
       return;
     }
-    next(err);
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    console.error("[vkyc] request failed", err instanceof Error ? err.message : err);
+    sendError(res, 500, "error", "Request failed");
   });
 
   return app;
