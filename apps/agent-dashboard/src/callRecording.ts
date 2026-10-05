@@ -5,7 +5,6 @@ import {
   selectLongerRecording,
   type CallTape,
 } from "../../api/src/callMediaRelease";
-import { getCallRecording, uploadCallRecording, type CallRecordingMode } from "./api";
 
 const REMOTE_TILE = '[data-livekit="remote"]';
 const LOCAL_TILE = '[data-livekit="local"]';
@@ -24,11 +23,41 @@ interface OwnedStream {
   close: () => void;
 }
 
+let primedAudio: AudioContext | null = null;
+let liveAudio: AudioContext | null = null;
+
 /**
- * Records the customer tile plus both microphones when Cloud egress cannot
- * start. The recorded stream is one the desk owns, so a LiveKit track swap
- * does not stop MediaRecorder. The original tracks stay up until the room
- * releases.
+ * Call from a click before the customer joins. Chrome only lets a later
+ * MediaRecorder mix both microphones if this context was opened by that gesture.
+ */
+export function primeCallAudio(): void {
+  const current = liveAudio && liveAudio.state !== "closed" ? liveAudio : primedAudio;
+  if (current && current.state !== "closed") {
+    void current.resume().catch(() => undefined);
+    return;
+  }
+  try {
+    primedAudio = new AudioContext();
+    void primedAudio.resume().catch(() => undefined);
+  } catch (error) {
+    console.error("[vkyc] call audio could not start", error);
+  }
+}
+
+function claimAudioContext(): AudioContext {
+  const primed = primedAudio && primedAudio.state !== "closed" ? primedAudio : null;
+  primedAudio = null;
+  const context = primed ?? new AudioContext();
+  liveAudio = context;
+  void context.resume().catch(() => undefined);
+  return context;
+}
+
+/**
+ * Records the customer tile plus both microphones into a WebM this browser
+ * keeps. Nothing is uploaded. The recorded stream is one the desk owns, so a
+ * LiveKit track swap does not stop MediaRecorder. The original tracks stay up
+ * until the room releases.
  */
 export function startTileRecording(): RunningTape | null {
   const remote = document.querySelector<HTMLVideoElement>(REMOTE_TILE);
@@ -178,13 +207,7 @@ function openDirectStream(remoteStream: MediaStream): OwnedStream | null {
 
 function openAudioMix(): { track: MediaStreamTrack; rebind: () => void; close: () => void } | null {
   try {
-    const context = new AudioContext();
-    void context.resume().catch(() => undefined);
-    if (context.state === "suspended") {
-      void context.close().catch(() => undefined);
-      console.error("[vkyc] call audio mix is blocked; recording the customer tile only");
-      return null;
-    }
+    const context = claimAudioContext();
     const destination = context.createMediaStreamDestination();
     // A silent clock keeps the mix track producing samples. With no source,
     // MediaRecorder stays "recording" but writes an empty webm.
@@ -259,6 +282,7 @@ function openAudioMix(): { track: MediaStreamTrack; rebind: () => void; close: (
         } catch {
           // The mix track already ended.
         }
+        if (liveAudio === context) liveAudio = null;
         void context.close().catch(() => undefined);
       },
     };
@@ -314,25 +338,35 @@ function pickMime(): string | undefined {
   return undefined;
 }
 
-export function useCallRecording(sessionId: string | null, agentName: string, mediaConnected: boolean): {
-  mode: CallRecordingMode | "unknown";
-  stopAndUpload: (endingSessionId: string) => Promise<void>;
-} {
-  const [mode, setMode] = useState<CallRecordingMode | "unknown">("unknown");
+export interface LocalCallRecording {
+  /** True while a MediaRecorder is taking this call. */
+  recording: boolean;
+  /** Object URL for the WebM kept after End. Null until then. */
+  downloadUrl: string | null;
+  /** Session the download belongs to. Other after-call desks do not show it. */
+  downloadSessionId: string | null;
+  /** Stop the recorder and keep the file in this tab. Safe to call twice. */
+  stop: (endingSessionId: string) => Promise<void>;
+}
+
+/**
+ * Records while the customer's camera is on the tile, then keeps the WebM in
+ * memory for a download link. End session stops the recorder here, before
+ * useLiveKit disconnects the room. Refreshing the page drops the file.
+ */
+export function useCallRecording(sessionId: string | null, customerLive: boolean): LocalCallRecording {
+  const [recording, setRecording] = useState(false);
+  const [download, setDownload] = useState<{ sessionId: string; url: string; bytes: number } | null>(null);
   const active = useRef<RunningTape | null>(null);
   const retained = useRef<Blob | null>(null);
   const ending = useRef(false);
   const timerRef = useRef(0);
   const chain = useRef<Promise<void>>(Promise.resolve());
-  const sent = useRef<{ id: string; bytes: number }>({ id: "", bytes: 0 });
+  const saved = useRef<{ sessionId: string; url: string; bytes: number } | null>(null);
   const sessionRef = useRef(sessionId);
-  const agentRef = useRef(agentName);
-  const mediaRef = useRef(mediaConnected);
-  const modeRef = useRef<CallRecordingMode | "unknown">(mode);
+  const customerRef = useRef(customerLive);
   sessionRef.current = sessionId;
-  agentRef.current = agentName;
-  mediaRef.current = mediaConnected;
-  modeRef.current = mode;
+  customerRef.current = customerLive;
 
   const enqueue = (task: () => Promise<void>): Promise<void> => {
     const run = chain.current.then(task, task);
@@ -343,23 +377,15 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
     return run;
   };
 
-  const rememberMode = (next: CallRecordingMode | "unknown") => {
-    modeRef.current = next;
-    setMode(next);
-  };
-
-  const uploadBlob = async (targetSessionId: string, blob: Blob): Promise<void> => {
+  const publish = (targetSessionId: string, blob: Blob) => {
     if (blob.size === 0) return;
-    if (sent.current.id === targetSessionId && blob.size < sent.current.bytes) {
-      console.warn(
-        `[vkyc] skipped shorter call recording (${blob.size} bytes < ${sent.current.bytes} bytes)`,
-      );
-      return;
-    }
-    await uploadCallRecording(targetSessionId, agentRef.current, blob);
-    if (sent.current.id !== targetSessionId || blob.size > sent.current.bytes) {
-      sent.current = { id: targetSessionId, bytes: blob.size };
-    }
+    const current = saved.current;
+    if (current?.sessionId === targetSessionId && blob.size <= current.bytes) return;
+    const url = URL.createObjectURL(blob);
+    if (current) URL.revokeObjectURL(current.url);
+    const next = { sessionId: targetSessionId, url, bytes: blob.size };
+    saved.current = next;
+    setDownload(next);
   };
 
   const longestBlob = async (running: RunningTape | null, kept: Blob | null): Promise<Blob | null> => {
@@ -374,8 +400,17 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
     return best && best.size > 0 ? best : null;
   };
 
-  // Layout so the recorder and its poll stop before useLiveKit's passive
-  // cleanup disconnects the room and stops the camera tracks.
+  const takeBlob = async (): Promise<Blob | null> => {
+    const running = active.current;
+    const kept = retained.current;
+    active.current = null;
+    retained.current = null;
+    setRecording(false);
+    return longestBlob(running, kept);
+  };
+
+  // Layout so the recorder stops before useLiveKit's passive cleanup
+  // disconnects the room and stops the camera tracks.
   useLayoutEffect(() => {
     ending.current = false;
     const endingSessionId = sessionId;
@@ -385,14 +420,10 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
       timerRef.current = 0;
       if (!endingSessionId) return;
       void enqueue(async () => {
-        const running = active.current;
-        const kept = retained.current;
-        active.current = null;
-        retained.current = null;
-        const blob = await longestBlob(running, kept);
-        if (!blob) return;
         try {
-          await uploadBlob(endingSessionId, blob);
+          const blob = await takeBlob();
+          if (!blob) return;
+          publish(endingSessionId, blob);
         } catch (error) {
           console.error("[vkyc] call recorder teardown failed", error);
         }
@@ -402,7 +433,7 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
 
   useEffect(() => {
     if (!sessionId) {
-      rememberMode("unknown");
+      setRecording(false);
       return;
     }
     if (ending.current) return;
@@ -414,19 +445,9 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
       void enqueue(async () => {
         try {
           if (cancelled || ending.current || sessionRef.current !== sessionId) return;
-          let statusMode: CallRecordingMode | "unknown";
-          try {
-            const status = await getCallRecording(sessionId, agentRef.current);
-            if (cancelled || ending.current || sessionRef.current !== sessionId) return;
-            statusMode = status.mode;
-            rememberMode(status.mode);
-          } catch {
-            if (!cancelled) rememberMode("unknown");
-            return;
-          }
           const action = fallbackRecorderAction({
-            mode: statusMode,
-            mediaConnected: mediaRef.current,
+            mode: "fallback",
+            mediaConnected: customerRef.current,
             ending: ending.current,
             recorderState: active.current?.state() ?? null,
           });
@@ -440,6 +461,7 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
           if (active.current) {
             const running = active.current;
             active.current = null;
+            setRecording(false);
             try {
               const blob = await running.stop();
               if (!cancelled && sessionRef.current === sessionId) {
@@ -449,7 +471,7 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
               console.error("[vkyc] call recorder stop failed", error);
             }
           }
-          if (cancelled || ending.current || sessionRef.current !== sessionId || !mediaRef.current) return;
+          if (cancelled || ending.current || sessionRef.current !== sessionId || !customerRef.current) return;
           const started = startTileRecording();
           if (!started) return;
           if (cancelled || ending.current || sessionRef.current !== sessionId) {
@@ -457,6 +479,7 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
             return;
           }
           active.current = started;
+          setRecording(true);
         } finally {
           ticking = false;
         }
@@ -470,24 +493,34 @@ export function useCallRecording(sessionId: string | null, agentName: string, me
       window.clearInterval(timer);
       if (timerRef.current === timer) timerRef.current = 0;
     };
-  }, [sessionId, mediaConnected]);
+  }, [sessionId, customerLive]);
 
-  async function stopAndUpload(endingSessionId: string): Promise<void> {
+  useEffect(() => {
+    return () => {
+      const current = saved.current;
+      if (!current) return;
+      URL.revokeObjectURL(current.url);
+      saved.current = null;
+    };
+  }, []);
+
+  async function stop(endingSessionId: string): Promise<void> {
     if (sessionRef.current !== endingSessionId) return;
     ending.current = true;
     window.clearInterval(timerRef.current);
     timerRef.current = 0;
     await enqueue(async () => {
       if (sessionRef.current !== endingSessionId) return;
-      const running = active.current;
-      const kept = retained.current;
-      active.current = null;
-      retained.current = null;
-      const blob = await longestBlob(running, kept);
+      const blob = await takeBlob();
       if (!blob) return;
-      await uploadBlob(endingSessionId, blob);
+      publish(endingSessionId, blob);
     });
   }
 
-  return { mode, stopAndUpload };
+  return {
+    recording,
+    downloadUrl: download?.url ?? null,
+    downloadSessionId: download?.sessionId ?? null,
+    stop,
+  };
 }
