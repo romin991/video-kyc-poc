@@ -160,6 +160,7 @@ export function KycWorkspace({
   disposition,
   recordingUrl,
   recordingId,
+  localDownloadUrl,
   kind,
   busy,
   capturePending,
@@ -191,6 +192,8 @@ export function KycWorkspace({
   disposition: Disposition | null;
   recordingUrl: string | null;
   recordingId: string | null;
+  /** WebM kept in this tab after End. Null when this session has no local file. */
+  localDownloadUrl: string | null;
   kind: CaptureKind;
   busy: boolean;
   capturePending: boolean;
@@ -410,7 +413,15 @@ export function KycWorkspace({
           <div className="panel-head">
             <h2 id="kyc-recording-heading">Call recording</h2>
           </div>
-          {recordingUrl ? (
+          {localDownloadUrl ? (
+            <div className="recording">
+              <a href={localDownloadUrl} download="call-recording.webm" data-kyc="recording-link">
+                Download recording
+              </a>
+              <video controls playsInline src={localDownloadUrl} data-kyc="recording-player" />
+              <p className="muted">Saved in this browser. Refreshing the page drops it.</p>
+            </div>
+          ) : recordingUrl ? (
             <div className="recording">
               <a
                 href={recordingUrl}
@@ -435,7 +446,7 @@ export function KycWorkspace({
             <p className="muted" data-kyc="recording-empty">
               {recordingId
                 ? `Recording id ${recordingId}. No playback URL yet.`
-                : "No recording attached yet. LiveKit egress can attach a URL after the call."}
+                : "No recording from this call."}
             </p>
           )}
         </section>

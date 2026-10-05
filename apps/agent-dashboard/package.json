@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/localAvFailure.test.ts"
+    "test": "node --experimental-strip-types --test src/localAvFailure.test.ts src/callRecording.test.ts"
   },
   "dependencies": {
     "livekit-client": "^2.22.3",

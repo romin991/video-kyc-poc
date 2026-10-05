@@ -46,6 +46,9 @@ const NOT_A_JWT =
  * present. Otherwise the call shell stays up and the camera stays off.
  *
  * Local camera attaches to [data-livekit="local"] and stays muted.
+ * The local microphone is attached to that same muted tile so the call
+ * recorder can mix it in. The mic does not set data-active, so a camera
+ * failure still shows on the tile.
  * Remote camera and microphone attach to [data-livekit="remote"].
  * data-active="true" is set when a video track attaches.
  *
@@ -114,9 +117,9 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     };
 
     const onLocalPublished = (publication: LocalTrackPublication) => {
-      if (cancelled || released) return;
-      if (publication.source !== Track.Source.Camera || !publication.track) return;
-      attachLocal(publication.track);
+      if (cancelled || released || !publication.track) return;
+      if (publication.source === Track.Source.Camera) attachLocal(publication.track);
+      if (publication.source === Track.Source.Microphone) attachLocalMic(publication.track);
     };
 
     room.on(RoomEvent.TrackSubscribed, onSubscribed);
@@ -245,10 +248,11 @@ async function publishLocalAv(
   try {
     for (const mediaTrack of stream.getAudioTracks()) {
       if (isCancelled()) break;
-      await room.localParticipant.publishTrack(mediaTrack, {
+      const publication = await room.localParticipant.publishTrack(mediaTrack, {
         source: Track.Source.Microphone,
         name: mediaTrack.label || "microphone",
       });
+      if (publication.track && !isCancelled()) attachLocalMic(publication.track);
     }
     for (const mediaTrack of stream.getVideoTracks()) {
       if (isCancelled()) break;
@@ -279,6 +283,14 @@ function attachLocal(track: LocalTrack): void {
   element.muted = true;
   element.dataset.active = "true";
   void element.play().catch(() => undefined);
+}
+
+/** Puts the agent mic on the muted local tile without marking the camera active. */
+function attachLocalMic(track: LocalTrack): void {
+  const element = document.querySelector<HTMLVideoElement>(LOCAL_VIDEO);
+  if (!element) return;
+  track.attach(element);
+  element.muted = true;
 }
 
 function attachRemote(track: RemoteTrack): void {

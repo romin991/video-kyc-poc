@@ -14,7 +14,7 @@ import {
   type Session,
   type SessionStatus,
 } from "./api";
-import { useCallRecording } from "./callRecording";
+import { primeCallAudio, useCallRecording } from "./callRecording";
 import { captureVideoStill } from "./captureStill";
 import { blobFromVideoFrame, useCaptureUpload } from "./captures";
 import { KycWorkspace, OnboardingFacts } from "./kyc";
@@ -67,12 +67,10 @@ function readCall(): ActiveCall | null {
   }
 }
 
-function recordingNote(mode: "off" | "pending" | "egress" | "fallback" | "stopped" | "unknown"): string {
-  if (mode === "egress") return " Call recording is on.";
-  if (mode === "pending") return " Call recording is starting.";
-  if (mode === "fallback") return " Cloud egress is unavailable, so this browser is recording the call.";
-  if (mode === "stopped") return " Call recording stopped.";
-  return "";
+function recordingNote(recording: boolean, customerLive: boolean): string {
+  if (recording) return " This browser is recording the call.";
+  if (!customerLive) return " Call recording starts when the customer connects.";
+  return " Call recording is starting.";
 }
 
 function statusLabel(status: SessionStatus): string {
@@ -167,7 +165,8 @@ export function App() {
   const focusId = call?.sessionId ?? acwId;
   const captures = useCaptureUpload(focusId, nameRef.current);
   const media = useLiveKit(call?.roomName ?? null, call?.agentToken ?? null);
-  const recording = useCallRecording(call?.sessionId ?? null, nameRef.current, media?.mediaConnected === true);
+  const customerLive = media?.remoteVideoTrack != null;
+  const recording = useCallRecording(call?.sessionId ?? null, customerLive);
   const spotlight = sessions.find((session) => session.id === spotlightId) ?? null;
   const focusSession = sessions.find((session) => session.id === focusId) ?? null;
   const waitingSessions = sessions
@@ -414,6 +413,7 @@ export function App() {
   }
 
   async function onClaimNext() {
+    primeCallAudio();
     setBusy("claim");
     setError(null);
     setNotice(null);
@@ -435,6 +435,7 @@ export function App() {
   }
 
   async function onAccept(session: Session) {
+    primeCallAudio();
     setBusy(session.id);
     setError(null);
     setNotice(null);
@@ -468,6 +469,7 @@ export function App() {
   }
 
   async function onEnd(sessionId: string) {
+    primeCallAudio();
     setBusy(sessionId);
     setError(null);
     const endingOurs = call?.sessionId === sessionId;
@@ -479,9 +481,9 @@ export function App() {
     clearCallTimers();
     if (endingOurs) guideIntent.current = null;
     try {
-      await recording.stopAndUpload(sessionId);
+      await recording.stop(sessionId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not upload the call recording.");
+      setError(err instanceof Error ? err.message : "Could not finish the call recording.");
     }
     try {
       await mutate(async () => {
@@ -707,6 +709,9 @@ export function App() {
         disposition={focusSession.disposition}
         recordingUrl={focusSession.recordingUrl}
         recordingId={focusSession.recordingId}
+        localDownloadUrl={
+          recording.downloadSessionId === focusSession.id ? recording.downloadUrl : null
+        }
         kind={focusSession.captureGuide ?? "face"}
         busy={busy !== null}
         capturePending={captures.pending}
@@ -815,9 +820,16 @@ export function App() {
                   : media?.serverUrl
                     ? "Connecting to LiveKit…"
                     : "VITE_LIVEKIT_URL is empty. Cameras stay off. The session shell still works."}
-              {recordingNote(recording.mode)}
+              {recordingNote(recording.recording, customerLive)}
             </p>
-            <button type="button" className="ghost" onClick={() => void remoteRef.current?.play()}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                primeCallAudio();
+                void remoteRef.current?.play();
+              }}
+            >
               Enable remote audio
             </button>
           </div>
