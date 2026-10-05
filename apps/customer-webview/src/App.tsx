@@ -70,22 +70,32 @@ function VideoTile({
   slot,
   videoRef,
   idGuide = false,
+  notice,
 }: {
   label: string;
   slot: "local" | "remote";
   videoRef?: Ref<HTMLVideoElement>;
   idGuide?: boolean;
+  notice?: string | null;
 }) {
   return (
-    <section className={`tile tile-${slot}`} aria-label={label}>
+    <section className={`tile tile-${slot}${notice ? " tile-error" : ""}`} aria-label={label}>
       <video ref={videoRef} data-livekit={slot} autoPlay muted={slot === "local"} playsInline />
-      {slot === "local" && idGuide ? <IdCaptureGuide /> : null}
+      {slot === "local" && idGuide && !notice ? <IdCaptureGuide /> : null}
       <div className="tile-fallback">
-        <span className="avatar" aria-hidden="true">
-          {label.slice(0, 1)}
-        </span>
-        <p>{label}</p>
-        <small>{slot === "local" ? "Your camera" : "Their camera"}</small>
+        {notice ? (
+          <p className="tile-error-copy" role="alert" data-local-av-message="">
+            {notice}
+          </p>
+        ) : (
+          <>
+            <span className="avatar" aria-hidden="true">
+              {label.slice(0, 1)}
+            </span>
+            <p>{label}</p>
+            <small>{slot === "local" ? "Your camera" : "Their camera"}</small>
+          </>
+        )}
       </div>
     </section>
   );
@@ -304,11 +314,16 @@ function JoinScreen({ token }: { token: string }) {
         {replyNote && !maPrompt && !digitChallenge ? <p className="sent-note">{replyNote}</p> : null}
         {replyError ? <p className="problem">{replyError}</p> : null}
       </div>
-      <div className={idGuide ? "stage stage-id-guide" : "stage"} data-capture-guide={idGuide ? "id" : "off"}>
+      <div
+        className={idGuide ? "stage stage-id-guide" : "stage"}
+        data-capture-guide={idGuide ? "id" : "off"}
+        data-local-av={media?.localPublishError ? "error" : undefined}
+      >
         <VideoTile label="Agent" slot="remote" videoRef={remoteRef} />
-        <VideoTile label="You" slot="local" idGuide={idGuide} />
+        <VideoTile label="You" slot="local" idGuide={idGuide} notice={media?.localPublishError} />
       </div>
       <div className="media-note">
+        {media?.localPublishError ? <p className="problem">{media.localPublishError}</p> : null}
         <p>
           {media?.mediaConnected
             ? "LiveKit connected."
