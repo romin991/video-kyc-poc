@@ -18,7 +18,7 @@
     "dev:customer-next": "pnpm --filter @vkyc/customer-next dev",
     "build": "pnpm --filter @vkyc/agent-dashboard --filter @vkyc/customer-webview build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @vkyc/api test"
+    "test": "pnpm --filter @vkyc/api test && pnpm --filter @vkyc/agent-dashboard test"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]

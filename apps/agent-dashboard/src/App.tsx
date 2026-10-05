@@ -107,20 +107,30 @@ function VideoTile({
   label,
   slot,
   videoRef,
+  notice,
 }: {
   label: string;
   slot: "local" | "remote";
   videoRef?: Ref<HTMLVideoElement>;
+  notice?: string | null;
 }) {
   return (
-    <section className={`tile tile-${slot}`} aria-label={label}>
+    <section className={`tile tile-${slot}${notice ? " tile-error" : ""}`} aria-label={label}>
       <video ref={videoRef} data-livekit={slot} autoPlay muted={slot === "local"} playsInline />
       <div className="tile-fallback">
-        <span className="avatar" aria-hidden="true">
-          {label.slice(0, 1)}
-        </span>
-        <p>{label}</p>
-        <small>{slot === "local" ? "Your camera" : "Their camera"}</small>
+        {notice ? (
+          <p className="tile-error-copy" role="alert" data-local-av-message="">
+            {notice}
+          </p>
+        ) : (
+          <>
+            <span className="avatar" aria-hidden="true">
+              {label.slice(0, 1)}
+            </span>
+            <p>{label}</p>
+            <small>{slot === "local" ? "Your camera" : "Their camera"}</small>
+          </>
+        )}
       </div>
     </section>
   );
@@ -789,11 +799,14 @@ export function App() {
               {busy === call.sessionId ? "Ending…" : "End session"}
             </button>
           </div>
-          <div className="stage">
+          <div className="stage" data-local-av={media?.localPublishError ? "error" : undefined}>
             <VideoTile label="Customer" slot="remote" videoRef={remoteRef} />
-            <VideoTile label="You" slot="local" />
+            <VideoTile label="You" slot="local" notice={media?.localPublishError} />
           </div>
           <div className="media-note">
+            {media?.localPublishError ? (
+              <p className="banner bad">{media.localPublishError}</p>
+            ) : null}
             <p>
               {media?.mediaConnected
                 ? "LiveKit connected."

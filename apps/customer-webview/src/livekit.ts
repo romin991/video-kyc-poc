@@ -16,6 +16,7 @@ import {
   type LiveKitRoomRelease,
   type StoppableTrack,
 } from "../../api/src/callMediaRelease";
+import { localAvFailureMessage } from "./localAvFailure";
 
 export interface LiveKitMedia {
   serverUrl: string | null;
@@ -25,6 +26,11 @@ export interface LiveKitMedia {
   mediaConnected: boolean;
   /** Why media did not start. Null while idle, connecting, or connected. */
   mediaError: string | null;
+  /**
+   * Set when the room stayed up but this camera and microphone did not publish.
+   * Null while idle, connecting, or after a successful publish.
+   */
+  localPublishError: string | null;
 }
 
 const LOCAL_VIDEO = '[data-livekit="local"]';
@@ -59,10 +65,12 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
   const serverUrl = rawUrl && rawUrl.length > 0 ? rawUrl : null;
   const [mediaConnected, setMediaConnected] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [localPublishError, setLocalPublishError] = useState<string | null>(null);
 
   useEffect(() => {
     setMediaConnected(false);
     setMediaError(null);
+    setLocalPublishError(null);
 
     if (!roomName || !token) return;
 
@@ -126,8 +134,10 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
         setMediaError(null);
         try {
           await publishLocalAv(room, ownedTracks, () => cancelled || released);
+          if (!cancelled && !released) setLocalPublishError(null);
         } catch (error) {
           console.error("[vkyc] local A/V publish failed", error);
+          if (!cancelled && !released) setLocalPublishError(localAvFailureMessage(error));
         }
         if (cancelled || released) return;
         room.remoteParticipants.forEach((participant) => {
@@ -164,6 +174,7 @@ export function useLiveKit(roomName: string | null, token: string | null): LiveK
     token,
     mediaConnected,
     mediaError: configurationError ?? mediaError,
+    localPublishError,
   };
 }
 

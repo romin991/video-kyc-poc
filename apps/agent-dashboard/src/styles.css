@@ -413,6 +413,20 @@ button.danger {
   box-shadow: var(--shadow);
 }
 
+.tile-local.tile-error {
+  top: 12px;
+  right: 12px;
+  bottom: auto;
+  left: 12px;
+  z-index: 4;
+  width: auto;
+  height: auto;
+  aspect-ratio: auto;
+  overflow: visible;
+  border-color: rgba(255, 155, 138, 0.7);
+  background: rgba(42, 18, 14, 0.94);
+}
+
 .tile video {
   display: none;
   position: absolute;
@@ -445,6 +459,20 @@ button.danger {
   padding: 12px;
 }
 
+.tile-error .tile-fallback {
+  width: 100%;
+  justify-items: start;
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.tile-error-copy {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .tile-fallback small,
 .media-note {
   color: var(--muted);
@@ -465,6 +493,12 @@ button.danger {
   align-items: flex-start;
   flex-direction: column;
   margin-top: 12px;
+}
+
+.media-note .banner {
+  width: 100%;
+  margin: 0;
+  color: var(--text);
 }
 
 .media-note code {
